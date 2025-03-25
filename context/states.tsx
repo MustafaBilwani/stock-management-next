@@ -1,7 +1,6 @@
-
 "use client";
 
-import { createContext, useState, ReactNode, useEffect, useRef, RefObject, useOptimistic, Dispatch, SetStateAction } from "react";
+import { createContext, useState, ReactNode, useRef, RefObject, useOptimistic, Dispatch, SetStateAction } from "react";
 import { productType } from "@/app/types";
 
 // Define the context type

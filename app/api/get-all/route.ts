@@ -1,23 +1,30 @@
 "use server"
 
 import { productType } from "@/app/types";
-import clientPromise from "@/lib/mongodb";
+import client from "@/lib/mongodb";
 import { NextResponse } from "next/server";
 import { requiredValuesType } from "@/app/types";
+import { auth } from "@/app/auth";
 
 export async function POST (request: Request) {
 
     try {
+
+        const session = await auth();
+        if (!session?.user) {
+            throw Error('unathorised')
+        }
+
         const {requiredValues} : {
             requiredValues: requiredValuesType
         } = await request.json();
         console.log('fetch request received')
 
-        const client = await clientPromise;
         if (!client) {
             console.log('unable to connect to database')
             throw new Error('unable to connect to database');
         };
+
         const db = client.db("stock-management-next");
         const productsCollection = db.collection("products");
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { CustomContext } from "@/context/states";
-import React, { startTransition, useContext, useState } from "react";
+import React, { startTransition, useCallback, useContext, useEffect, useState } from "react";
 import { handleFetchAll } from "../handleFetchAll";
 import { productType } from "@/app/types";
 import { addProduct } from "../action/addProduct";
@@ -22,23 +22,31 @@ const Page = () => {
 
 	const [InputValue, setInputValue] = useState('')
 	const [filter, setFilter] = useState('active');
+	const [Error, setError] = useState(false)
   
-	if (!fetched.current.products) {
-    (async () => {
-      const result = await handleFetchAll({ products: true });
-			if (result.success) {
-				setProducts(result.products);
-				fetched.current.products = true;
-			} else {
-				toaster.error({
-					title: 'Failed',
-					description: 'failed to fetch',
-					type: "error"
-				})
-				console.log(result.error);
-			};
-    })();
-	}
+	useEffect(() => {
+		if (!fetched.current.products) {
+			fetchProducts();
+		}
+	}, [])
+
+	const checkDuplicateName = (newName: string) => (optimisticProducts.filter(product => product.active).some(product => (product.name.toLowerCase() === newName.toLowerCase())))
+
+	const fetchProducts = useCallback(async () => {
+		const result = await handleFetchAll({ products: true });
+		if (result.success) {
+			setProducts(result.products);
+			fetched.current.products = true;
+		} else {
+			toaster.error({
+				title: 'Failed',
+				description: 'failed to fetch',
+				type: "error"
+			})
+			console.log(result.error);
+			setError(true)
+		};
+	}, []);
 
 	async function handleAddProduct() {
 
@@ -53,7 +61,7 @@ const Page = () => {
 			return
 		};
 
-		if (optimisticProducts.filter(product => product.active).some(product => (product.name.toLowerCase() === newName.toLowerCase()))) {
+		if (checkDuplicateName(newName)) {
 			toaster.create({
 				description: "Product name already exist",
 				type: "error",
@@ -70,7 +78,6 @@ const Page = () => {
 		startTransition(() => {
 			setOptimisticProducts(prev => [...prev, newProduct]);
 		})
-
 		
 		const data = new Promise<void>(async (resolve) => {
 			const response = await addProduct(newProduct);
@@ -79,6 +86,7 @@ const Page = () => {
 				resolve()
 			} else {console.log(response.error)}
 		})
+
 		toaster.promise(data, {
 			success: {
 				title: "Operation successful",
@@ -94,6 +102,7 @@ const Page = () => {
 
 	async function handleDeleteProduct(id: number) {
 		if (!window.confirm('are you sure you want to delete')) return
+		
 		startTransition(() => {
 			setOptimisticProducts(prev => prev.map(product => product.id === id ? {...product, active: false} : product));
 		})
@@ -103,8 +112,11 @@ const Page = () => {
 			if (response.success) {
 				setProducts(prev => prev.map(product => product.id === id ? {...product, active: false} : product));
 				resolve()
-			} else {console.log(response.error)}
+			} else {
+				console.log(response.error)
+			}
 		})
+		
 		toaster.promise(data, {
 			success: {
 				title: "Operation successful",
@@ -123,7 +135,9 @@ const Page = () => {
 
 		const newName = optimisticProducts.find(product => product.id === id)?.name
 
-		if (optimisticProducts.filter(product => product.active).some(product => (product.name.toLowerCase() === newName?.toLowerCase()))) {
+		if (typeof newName !== 'string') return
+
+		if (checkDuplicateName(newName)) {
 			toaster.create({
 				title: "Product name already exist",
 				description: "Active product have same name cannot restore product",
@@ -233,6 +247,11 @@ const Page = () => {
 							))}
 						</Table.Body>
 					</Table.Root>
+					</>
+				) : Error ? (
+					<>
+						<h1>Something went wrong</h1>
+						<Button onClick={() => {setError(false); fetchProducts()}} w={"200px"}>Retry</Button>
 					</>
 				) : (
 					<h1>Loading...</h1>

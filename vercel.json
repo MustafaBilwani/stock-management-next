@@ -1,7 +1,0 @@
-{
-  "functions": {
-    "app/api/get-all": {
-      "maxDuration": 60
-    }
-  }
-}

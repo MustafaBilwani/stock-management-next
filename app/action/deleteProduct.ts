@@ -1,11 +1,15 @@
 'use server'
 
-import clientPromise from "@/lib/mongodb";
+import client from "@/lib/mongodb";
+import { auth } from "../auth";
 
 export async function deleteProduct (id: number) {
   try {
-    const client = await clientPromise;
-    if (!client) throw new Error('unable to connect to database');
+    const session = await auth();
+    if (!session?.user) {
+        throw Error('unathorised')
+    }
+
     const db = client.db("stock-management-next");
     const productsCollection = db.collection("products");
 
