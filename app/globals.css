@@ -120,3 +120,7 @@
     @apply bg-background text-foreground;
   }
 }
+
+.text-red-900 {
+  color: red;
+}

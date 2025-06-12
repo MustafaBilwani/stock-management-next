@@ -2,22 +2,24 @@
 
 import { CustomContext } from "@/context/states";
 import React, { startTransition, useCallback, useContext, useEffect, useState } from "react";
-import { handleFetchAll } from "../handleFetchAll";
+import { handleFetch } from "../handleFetch";
 import { productType } from "@/app/types";
-import { addProduct } from "../action/addProduct";
-import { MdDelete } from "react-icons/md";
-import { TbRestore } from "react-icons/tb";
-import { deleteProduct } from "../action/deleteProduct";
-import { restoreProduct } from "../action/restoreProduct";
+import { addProduct, checkProductAllowedToDelete, deleteProduct, restoreProduct } from "../server-action/productActions";
 import { Toaster, toaster } from "@/components/ui/toaster";
-import { Box, Button, Input, NativeSelect, Table } from "@chakra-ui/react";
+import { Box, Button, Input, Menu, NativeSelect, Portal, Table } from "@chakra-ui/react";
+import { IoMdMenu } from "react-icons/io";
+import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
 
 const Page = () => {
+	
+	const router = useRouter()
+	const {status} = useSession()
   const { 
 		optimisticProducts,
 		setOptimisticProducts,
 		setProducts,
-		fetched
+		fetched,
 	} = useContext(CustomContext);
 
 	const [InputValue, setInputValue] = useState('')
@@ -25,15 +27,15 @@ const Page = () => {
 	const [Error, setError] = useState(false)
   
 	useEffect(() => {
-		if (!fetched.current.products) {
+		if (status === 'authenticated' && !fetched.current.products) {
 			fetchProducts();
 		}
-	}, [])
+	}, [status])
 
 	const checkDuplicateName = (newName: string) => (optimisticProducts.filter(product => product.active).some(product => (product.name.toLowerCase() === newName.toLowerCase())))
 
 	const fetchProducts = useCallback(async () => {
-		const result = await handleFetchAll({ products: true });
+		const result = await handleFetch('products');
 		if (result.success) {
 			setProducts(result.products);
 			fetched.current.products = true;
@@ -70,21 +72,25 @@ const Page = () => {
 		}
 
 		const newProduct: productType = {
-			id: Date.now(),
+			id: Date.now().toString(),
 			name: newName,
-			active: true
+			active: true,
+			stock: 0
 		};
 
 		startTransition(() => {
 			setOptimisticProducts(prev => [...prev, newProduct]);
 		})
 		
-		const data = new Promise<void>(async (resolve) => {
+		const data = new Promise<void>(async (resolve, reject) => {
 			const response = await addProduct(newProduct);
 			if (response.success) {
 				setProducts(prev => [...prev, newProduct])
 				resolve()
-			} else {console.log(response.error)}
+			} else {
+				console.error(response.error)
+				reject()
+			}
 		})
 
 		toaster.promise(data, {
@@ -100,20 +106,40 @@ const Page = () => {
 		})
 	}
 
-	async function handleDeleteProduct(id: number) {
+	async function handleDeleteProduct(id: string) {
 		if (!window.confirm('are you sure you want to delete')) return
+
+		const allowed = await checkProductAllowedToDelete(id)
+		if (!allowed.success) {
+			toaster.create({
+				title: "Operation failed",
+				description: "Unexpected error occured",
+				type: "error",
+			})
+			return
+		}
+		
+		if (!allowed.allowed) {
+			toaster.create({
+				title: "Request declined",
+				description: "Product has some record it cannot be deleted",
+				type: "error",
+			})
+			return
+		}
 		
 		startTransition(() => {
 			setOptimisticProducts(prev => prev.map(product => product.id === id ? {...product, active: false} : product));
 		})
 		
-		const data = new Promise<void>(async (resolve) => {
+		const data = new Promise<void>(async (resolve, reject) => {
 			const response = await deleteProduct(id);
 			if (response.success) {
 				setProducts(prev => prev.map(product => product.id === id ? {...product, active: false} : product));
 				resolve()
 			} else {
 				console.log(response.error)
+				reject()
 			}
 		})
 		
@@ -130,12 +156,12 @@ const Page = () => {
 		})
 	}
 
-	async function handleRestoreProduct(id: number) {
+	async function handleRestoreProduct(id: string) {
 		if (!window.confirm('are you sure you want to restore')) return
 
 		const newName = optimisticProducts.find(product => product.id === id)?.name
 
-		if (typeof newName !== 'string') return
+		if (!newName) return
 
 		if (checkDuplicateName(newName)) {
 			toaster.create({
@@ -150,12 +176,15 @@ const Page = () => {
 			setOptimisticProducts(prev => prev.map(product => product.id === id ? {...product, active: true} : product));
 		})		
 		
-		const data = new Promise<void>(async (resolve) => {
+		const data = new Promise<void>(async (resolve, reject) => {
 			const response = await restoreProduct(id);
 			if (response.success) {
 				setProducts(prev => prev.map(product => product.id === id ? {...product, active: true} : product));
 				resolve()
-			} else {console.log(response.error)}
+			} else {
+				console.log(response.error)
+				reject()
+			}
 		})
 		toaster.promise(data, {
 			success: {
@@ -168,6 +197,15 @@ const Page = () => {
 			},
 			loading: { title: "Restoring..." },
 		})
+	}
+
+	if (status === 'unauthenticated') {
+		router.push('/api/auth/signin')
+		return <p>Unauthorized</p>
+	}
+
+	if (status === 'loading') {
+		return <p>Loading...</p>;
 	}
 
 	return ( 
@@ -229,19 +267,24 @@ const Page = () => {
 								if (filter === 'inactive') return !product.active;
 								return true;
 							}).map(product => (
-								<Table.Row key={product.id}>
+								<Table.Row key={product.id} color={product.active ? 'black' : 'red'}>
 									<Table.Cell>{product.name}</Table.Cell>
 									<Table.Cell>{product.active ? 'Active' : 'Inactive'}</Table.Cell>
 									<Table.Cell>
-										{product.active ? (
-											<Button bg={"none"} onClick={() => handleDeleteProduct(product.id)}>
-												<MdDelete color="black" />
-											</Button>
-										) : (
-											<Button bg={"none"} onClick={() => handleRestoreProduct(product.id)}>
-												<TbRestore color="black" />
-											</Button>
-										)}
+										<Menu.Root>
+											<Menu.Trigger asChild><IoMdMenu /></Menu.Trigger>
+											<Portal>
+												<Menu.Positioner>
+													<Menu.Content>
+														<Menu.Item value="" onClick={() => product.active ?
+															handleDeleteProduct(product.id) : handleRestoreProduct(product.id)
+														}>
+															{product.active ? 'Delete' : 'Restore' }
+														</Menu.Item>
+													</Menu.Content>
+												</Menu.Positioner>
+											</Portal>
+										</Menu.Root>
 									</Table.Cell>
 								</Table.Row>
 							))}

@@ -1,13 +1,25 @@
 "use client";
 
 import { createContext, useState, ReactNode, useRef, RefObject, useOptimistic, Dispatch, SetStateAction } from "react";
-import { productType } from "@/app/types";
+import { comingActionType, productType, requiredValuesType, vendorPaymentType, vendorType } from "@/app/types";
 
-// Define the context type
 interface StoreContextType {
   optimisticProducts: productType[];
   setProducts: Dispatch<SetStateAction<productType[]>>;
   setOptimisticProducts: Dispatch<SetStateAction<productType[]>>;
+
+  optimisticVendors: vendorType[];
+  setVendors: Dispatch<SetStateAction<vendorType[]>>;
+  setOptimisticVendors: Dispatch<SetStateAction<vendorType[]>>;
+
+  optimisticComingActionArray: comingActionType[];
+  setComingActionArray: Dispatch<SetStateAction<comingActionType[]>>;
+  setOptimisticComingActionArray: Dispatch<SetStateAction<comingActionType[]>>;
+
+  optimisticVendorPaymentArray: vendorPaymentType[];
+  setVendorPaymentArray: Dispatch<SetStateAction<vendorPaymentType[]>>;
+  setOptimisticVendorPaymentArray: Dispatch<SetStateAction<vendorPaymentType[]>>;
+  
   fetched: RefObject<{
     products: boolean,
     vendors: boolean,
@@ -15,17 +27,26 @@ interface StoreContextType {
     darazGoing: boolean,
     courierGoing: boolean,
     hhcGoing: boolean,
-    stock: boolean
+    payment: boolean
   }>
 }
 
-// Create context without default value
 export const CustomContext = createContext<StoreContextType>({} as StoreContextType);
 
-
 export function Store({ children }: { children: ReactNode }) {
+
   const [products, setProducts] = useState<productType[]>([]);
   const [optimisticProducts, setOptimisticProducts] = useOptimistic(products)
+  
+  const [vendors, setVendors] = useState<vendorType[]>([]);
+  const [optimisticVendors, setOptimisticVendors] = useOptimistic(vendors)
+
+  const [comingActionArray, setComingActionArray] = useState<comingActionType[]>([]);
+  const [optimisticComingActionArray, setOptimisticComingActionArray] = useOptimistic(comingActionArray)
+
+  const [vendorPaymentDetailArray, setVendorPaymentArray] = useState<vendorPaymentType[]>([]);
+  const [optimisticVendorPaymentArray, setOptimisticVendorPaymentArray] = useOptimistic(vendorPaymentDetailArray)
+  
   const fetched = useRef({
     products: false,
     vendors: false,
@@ -33,11 +54,17 @@ export function Store({ children }: { children: ReactNode }) {
     darazGoing: false,
     courierGoing: false,
     hhcGoing: false,
-    stock: false
+    payment: false
   })
 
   return (
-    <CustomContext.Provider value={{ optimisticProducts, setProducts, fetched, setOptimisticProducts}}>
+    <CustomContext.Provider value={{ 
+      fetched,
+      optimisticProducts, setProducts, setOptimisticProducts,
+      optimisticVendors, setVendors, setOptimisticVendors, 
+      optimisticComingActionArray, setComingActionArray, setOptimisticComingActionArray,
+      optimisticVendorPaymentArray, setVendorPaymentArray, setOptimisticVendorPaymentArray,
+    }}>
       {children}
     </CustomContext.Provider>
   );

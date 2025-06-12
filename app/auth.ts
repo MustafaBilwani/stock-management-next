@@ -18,7 +18,6 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       return !!auth
     },
     signIn: async ({user}) => {
-      console.log(user.email)
       const db = client.db("stock-management-next");
       const usersCollection = db.collection("allowed-users");
       const userExists = await usersCollection.findOne({ email: user.email });

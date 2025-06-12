@@ -12,7 +12,18 @@ const Navbar = () => {
       <Link href="/products" className="hover:text-gray-400">
         <Text display={"inline"} _hover={{color: "gray.400"}}>Products</Text>
       </Link>
-      {/* Future links can be added here */}
+      <Link href="/vendors" className="hover:text-gray-400">
+        <Text display={"inline"} _hover={{color: "gray.400"}}>Vendors</Text>
+      </Link>
+      <Link href="/actions/coming" className="hover:text-gray-400">
+        <Text display={"inline"} _hover={{color: "gray.400"}}>Coming</Text>
+      </Link>
+      <Link href="/actions/payment" className="hover:text-gray-400">
+        <Text display={"inline"} _hover={{color: "gray.400"}}>Payment</Text>
+      </Link>
+      <Link href="/stock" className="hover:text-gray-400">
+        <Text display={"inline"} _hover={{color: "gray.400"}}>Stock</Text>
+      </Link>
     </Box>
   )
 }
