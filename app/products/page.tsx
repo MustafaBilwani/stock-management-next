@@ -1,8 +1,7 @@
 "use client";
 
 import { CustomContext } from "@/context/states";
-import React, { startTransition, useCallback, useContext, useEffect, useState } from "react";
-import { handleFetch } from "../handleFetch";
+import React, { startTransition, useContext, useState } from "react";
 import { productType } from "@/app/types";
 import { addProduct, checkProductAllowedToDelete, deleteProduct, restoreProduct } from "../server-action/productActions";
 import { Toaster, toaster } from "@/components/ui/toaster";
@@ -10,45 +9,23 @@ import { Box, Button, Input, Menu, NativeSelect, Portal, Table } from "@chakra-u
 import { IoMdMenu } from "react-icons/io";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import { useFetch } from "../useFetch";
 
 const Page = () => {
 	
 	const router = useRouter()
 	const {status} = useSession()
-  const { 
-		optimisticProducts,
+  	const {
 		setOptimisticProducts,
 		setProducts,
-		fetched,
 	} = useContext(CustomContext);
 
 	const [InputValue, setInputValue] = useState('')
 	const [filter, setFilter] = useState('active');
-	const [Error, setError] = useState(false)
   
-	useEffect(() => {
-		if (status === 'authenticated' && !fetched.current.products) {
-			fetchProducts();
-		}
-	}, [status])
+	const {optimisticProducts, fetchStatus, setFetchStatus} = useFetch(['coming', 'products', "vendors"]);
 
 	const checkDuplicateName = (newName: string) => (optimisticProducts.filter(product => product.active).some(product => (product.name.toLowerCase() === newName.toLowerCase())))
-
-	const fetchProducts = useCallback(async () => {
-		const result = await handleFetch('products');
-		if (result.success) {
-			setProducts(result.products);
-			fetched.current.products = true;
-		} else {
-			toaster.error({
-				title: 'Failed',
-				description: 'failed to fetch',
-				type: "error"
-			})
-			console.log(result.error);
-			setError(true)
-		};
-	}, []);
 
 	async function handleAddProduct() {
 
@@ -212,24 +189,24 @@ const Page = () => {
     <Box display={"flex"} flexDirection={"row"} width={"100%"} my={"4"}>
       <Box display={"flex"} flexDirection={"column"} width={"1/2"} px={"4"}>
         <Input
-          type="text"
-          placeholder="Enter Product Name"
-          className="border-2 p-2 w-full"
-          value={InputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-					onKeyDown={(e) => e.key === 'Enter' && handleAddProduct()}
-					disabled={!fetched.current.products} 
-					border={"4"}
-					borderColor={"black"}
-					padding={2}
-					mb='2'
-				/>
-        <Button onClick={handleAddProduct} disabled={!fetched.current.products} variant="solid" colorPalette={"blue"}>
+			type="text"
+			placeholder="Enter Product Name"
+			className="border-2 p-2 w-full"
+			value={InputValue}
+			onChange={(e) => setInputValue(e.target.value)}
+			onKeyDown={(e) => e.key === 'Enter' && handleAddProduct()}
+			disabled={fetchStatus !== 'success'} 
+			border={"4"}
+			borderColor={"black"}
+			padding={2}
+			mb='2'
+		/>
+        <Button onClick={handleAddProduct} disabled={fetchStatus !== 'success'} variant="solid" colorPalette={"blue"}>
           Add Product
         </Button>
       </Box>
       <Box display={"flex"} flexDirection={"column"} width={"1/2"} px={"4"}>
-				{fetched.current.products ? (
+				{fetchStatus === 'success' ? (
 					<>		
 
 					<Box mb={"4"} p={"2"}>
@@ -291,10 +268,10 @@ const Page = () => {
 						</Table.Body>
 					</Table.Root>
 					</>
-				) : Error ? (
+				) : fetchStatus === 'error' ? (
 					<>
 						<h1>Something went wrong</h1>
-						<Button onClick={() => {setError(false); fetchProducts()}} w={"200px"}>Retry</Button>
+						<Button onClick={() => {setFetchStatus('loading')}} w={"200px"}>Retry</Button>
 					</>
 				) : (
 					<h1>Loading...</h1>

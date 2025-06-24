@@ -1,8 +1,7 @@
 'use client'
 
 import { CustomContext } from "@/context/states";
-import React, { startTransition, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { handleFetch } from "../../handleFetch";
+import React, { startTransition, useCallback, useContext, useMemo, useRef } from "react";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -16,6 +15,7 @@ import { AgGridReact } from 'ag-grid-react';
 import { SetFilterModule } from 'ag-grid-enterprise'
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import { useFetch } from "@/app/useFetch";
 
 const schema = z.object({
 
@@ -33,13 +33,10 @@ const schema = z.object({
 const Page = () => {
   
   const router = useRouter()
-  const {status} = useSession()
+  const {status : authStatus} = useSession()
 
   const {
 		setVendors,
-    optimisticVendors,
-		fetched,
-    optimisticVendorPaymentArray,
     setVendorPaymentArray,
     setOptimisticVendorPaymentArray
 	} = useContext(CustomContext);
@@ -52,56 +49,14 @@ const Page = () => {
   } = useForm({
     resolver: zodResolver(schema),
   });
-	const [Error, setError] = useState(false)
-
-  useEffect(() => {
-    requiredValuesForComponent.forEach((value) => {
-      if (status === 'authenticated' && !fetched.current[value.name]) {
-        value.function();
-      }
-    })
-	}, [status])
-
-  const fetchVendors = useCallback(async () => {
-		const result = await handleFetch("vendors");
-		if (result.success) {
-			setVendors(result.vendors);
-			fetched.current.vendors = true;
-		} else {
-			toaster.error({
-				title: 'Failed',
-				description: 'failed to fetch',
-				type: "error"
-			})
-			console.log(result.error);
-			setError(true)
-		};
-	}, []);
-
-  const fetchPayment = useCallback(async () => {
-		const result = await handleFetch('payment');
-		if (result.success) {
-			setVendorPaymentArray(result.payment);
-			fetched.current.payment = true;
-		} else {
-			toaster.error({
-				title: 'Failed',
-				description: 'failed to fetch',
-				type: "error"
-			})
-			console.log(result.error);
-			setError(true)
-		};
-	}, []);
-
-  const requiredValuesForComponent: {
-    name: 'products' | 'vendors' | 'payment',
-    function: () => void
-  }[] = [
-    {name: 'vendors', function: () => {fetchVendors()}},
-    {name: 'payment', function: () => {fetchPayment()}}
-  ]
   
+  const {
+    optimisticVendors,
+    optimisticVendorPaymentArray,
+    fetchStatus,
+    setFetchStatus
+  } = useFetch([ "vendors", "payment" ]);
+
   async function handleDeletePayment(id: string) {
     if (!window.confirm("Are you sure you want to delete?")) return;
 
@@ -337,12 +292,12 @@ const Page = () => {
     }
   }), []);
 
-  if (status === 'unauthenticated') {
+  if (authStatus === 'unauthenticated') {
     router.push('/api/auth/signin')
     return <p>Unauthorized</p>
   }
 
-  if (status === 'loading') {
+  if (authStatus === 'loading') {
     return <p>Loading...</p>;
   }
 
@@ -419,14 +374,14 @@ const Page = () => {
                   <Field.ErrorText>{errors.notes?.message && errors.notes?.message}</Field.ErrorText>
                 </Field.Root>
                 
-                <Button type="submit" disabled={requiredValuesForComponent.some(value => !fetched.current[value.name])} >Submit</Button>
+                <Button type="submit" disabled={fetchStatus !== 'success'} >Submit</Button>
               </form>                
             </Accordion.ItemBody>
           </Accordion.ItemContent>
         </Accordion.Item>
       </Accordion.Root>
       <Box display={"flex"} flexDirection={"column"} h='90vh'>
-        {requiredValuesForComponent.every(value => fetched.current[value.name]) ? (
+        {fetchStatus === 'success' ? (
           <>
             <Box mb={"4"} p={"2"}>
               <Heading size={'3xl'} mt={"4"} mr={'4'} display={"inline-block"}>Data</Heading>
@@ -447,16 +402,11 @@ const Page = () => {
               initialState={initialState}
             />
           </>
-        ) : Error ? (
+        ) : fetchStatus === 'error' ? (
           <>
             <h1>Something went wrong</h1>
 						<Button onClick={() => {
-              setError(false);
-              requiredValuesForComponent.forEach((value) => {
-                if (!fetched.current[value.name]) {
-                  value.function();
-                }
-              })          
+              setFetchStatus('loading');        
             }} w={"200px"}>Retry</Button>
           </>
         ) : (

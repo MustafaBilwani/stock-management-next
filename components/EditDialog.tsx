@@ -25,13 +25,6 @@ const EditDialog = ({isEditing, rowData, handleEditComingAction} : {
     date: string,
     notes: string
   }) => void
-  //   qty: number,
-  //   pricePerPcs: number,
-  //   vendor: string,
-  //   product: string,
-  //   date: string,
-  //   notes: string
-  // }) => void
 }) => {
 
   const {

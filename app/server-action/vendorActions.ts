@@ -8,7 +8,7 @@ export async function addVendor (Vendor: vendorType) {
   try {
     const session = await auth();
     if (!session?.user) {
-        throw Error('unathorised')
+      throw Error('unathorised')
     }
 
     const db = client.db("stock-management-next");
@@ -29,7 +29,7 @@ export async function deleteVendor (id: string) {
   try {
     const session = await auth();
     if (!session?.user) {
-        throw Error('unathorised')
+      throw Error('unathorised')
     }
 
     const db = client.db("stock-management-next");

@@ -4,11 +4,11 @@ import { vendorPaymentType } from "@/app/types";
 import client from "@/lib/mongodb";
 import { auth } from "../auth";
 
-export async function addPayment (newPayment: vendorPaymentType) {
+export async function addPayment(newPayment: vendorPaymentType) {
   try {
     const session = await auth();
     if (!session?.user) {
-        throw Error('unathorised')
+      throw Error('unathorised')
     }
 
     const db = client.db("stock-management-next");
@@ -20,9 +20,9 @@ export async function addPayment (newPayment: vendorPaymentType) {
     await dbSession.withTransaction(async () => {
       const insertRequest = await paymentCollection.insertOne(newPayment, { session: dbSession });
       const updateRequestVendor = await vendorCollection.findOneAndUpdate(
-        {id: newPayment.vendor},
+        { id: newPayment.vendor },
         { $inc: { balance: -newPayment.amount } }, // add to credit
-        {session: dbSession}
+        { session: dbSession }
       )
       if (!insertRequest || !updateRequestVendor) throw new Error('something went wrong unable to add payment');
 
@@ -36,7 +36,7 @@ export async function addPayment (newPayment: vendorPaymentType) {
   }
 }
 
-export async function deletePayment (payment: vendorPaymentType) {
+export async function deletePayment(payment: vendorPaymentType) {
   try {
     const session = await auth();
     if (!session?.user) {
@@ -56,12 +56,12 @@ export async function deletePayment (payment: vendorPaymentType) {
       );
 
       const updateRequestVendor = await vendorCollection.findOneAndUpdate(
-        {id: payment.vendor}, 
+        { id: payment.vendor },
         { $inc: { balance: payment.amount } }, // delete from credit
-        {session: dbSession}
+        { session: dbSession }
       )
- 
-      
+
+
       if (!deleteRequest || !updateRequestVendor) {
         throw new Error("unable to delete payment");
       }
@@ -82,7 +82,7 @@ export async function restorePayment(payment: vendorPaymentType) {
     if (!session?.user) {
       throw new Error("unauthorised");
     }
-    
+
     const dbSession = client.startSession();
     const db = client.db("stock-management-next");
     const paymentCollection = db.collection("payment");
@@ -96,11 +96,11 @@ export async function restorePayment(payment: vendorPaymentType) {
       );
 
       const updateRequestVendor = await vendorsCollection.findOneAndUpdate(
-        {id: payment.vendor},
+        { id: payment.vendor },
         { $inc: { balance: -payment.amount } }, // add to credit
-        {session: dbSession}
+        { session: dbSession }
       )
-      
+
       if (!restoreRequest || !updateRequestVendor) {
         throw new Error("unable to restore payment");
       }

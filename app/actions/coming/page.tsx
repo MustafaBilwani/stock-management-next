@@ -2,11 +2,10 @@
 
 import { CustomContext } from "@/context/states";
 import React, { startTransition, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { handleFetch } from "../../handleFetch";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { Accordion, Box, Button, Field, Heading, Input, Menu, NativeSelect, Portal, Span } from "@chakra-ui/react";
 import { IoMdMenu } from "react-icons/io";
-import { useForm } from 'react-hook-form';
+import { set, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { comingActionType } from "@/app/types";
@@ -17,6 +16,7 @@ import { SetFilterModule } from 'ag-grid-enterprise'
 import EditDialog from "@/components/EditDialog";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import { useFetch } from "../../useFetch";
 
 const Page = () => {
   
@@ -43,15 +43,19 @@ const Page = () => {
   });
 
   const {
-		optimisticProducts,
 		setProducts,
     setVendors,
-    optimisticVendors,
-		fetched,
-    optimisticComingActionArray,
     setComingActionArray,
     setOptimisticComingActionArray
 	} = useContext(CustomContext);
+
+  const {
+    optimisticComingActionArray,
+    optimisticProducts,
+    optimisticVendors,
+    fetchStatus,
+    setFetchStatus
+  } = useFetch(['coming', 'products', "vendors"]);
   
   const {
     register,
@@ -69,71 +73,6 @@ const Page = () => {
 
   // Register all Community features -- to be edited
   ModuleRegistry.registerModules([AllCommunityModule, SetFilterModule]);
-
-  useEffect(() => {
-    requiredValuesForComponent.forEach((value) => {
-      if (status === 'authenticated' && !fetched.current[value.name]) {
-        value.function();
-      }
-    })
-	}, [status])
-
-  const fetchProducts = useCallback(async () => {
-		const result = await handleFetch('products');
-		if (result.success) {
-			setProducts(result.products);
-			fetched.current.products = true;
-		} else {
-			toaster.error({
-				title: 'Failed',
-				description: 'failed to fetch',
-				type: "error"
-			})
-			console.log(result.error);
-			setError(true)
-		};
-	}, []);
-
-  const fetchVendors = useCallback(async () => {
-		const result = await handleFetch("vendors");
-		if (result.success) {
-			setVendors(result.vendors);
-			fetched.current.vendors = true;
-		} else {
-			toaster.error({
-				title: 'Failed',
-				description: 'failed to fetch',
-				type: "error"
-			})
-			console.log(result.error);
-			setError(true)
-		};
-	}, []);
-
-  const fetchComing = useCallback(async () => {
-		const result = await handleFetch('coming');
-		if (result.success) {
-			setComingActionArray(result.coming);
-			fetched.current.coming = true;
-		} else {
-			toaster.error({
-				title: 'Failed',
-				description: 'failed to fetch',
-				type: "error"
-			})
-			console.log(result.error);
-			setError(true)
-		};
-	}, []);
-
-  const requiredValuesForComponent: {
-    name: 'products' | 'vendors' | 'coming',
-    function: () => void
-  }[] = [
-    {name: 'products', function: () => {fetchProducts()}},
-    {name: 'vendors', function: () => {fetchVendors()}},
-    {name: 'coming', function: () => {fetchComing()}}
-  ]
 
   async function handleEditComingAction(
     newComingAction: Omit<comingActionType, 'id' | 'type' | 'active' | 'productName' | 'vendorName' | 'priceTotal'>
@@ -171,19 +110,6 @@ const Page = () => {
             action.id === processedNewComingAction.id ? processedNewComingAction : action
           )
         );
-        // setProducts(prev =>
-        //   prev.map(product =>
-        //     product.id === processedNewComingAction.product
-        //       ? {
-        //           ...product,
-        //           stock:
-        //             product.id === oldComingAction?.product
-        //               ? product.stock - oldComingAction?.qty + processedNewComingAction.qty
-        //               : product.stock,
-        //         }
-        //       : product
-        //   )
-        // );
         if (oldComingAction.active) { 
           setProducts(p =>
               p.map(prod => {
@@ -398,6 +324,8 @@ const Page = () => {
     });
   }
 
+  // ag-grid
+
   const colDefs: ColDef<comingActionType, any>[] = [
     {field: 'qty'},
     {field: 'pricePerPcs', headerName: 'Price per Pcs'},
@@ -525,41 +453,6 @@ const Page = () => {
     editable: false
   }), []);
 
-  // suppressKeyboardEvent: (params) => {
-  //   const { editing, event } = params;
-  //   if (editing) return false;
-    
-  //   // Allow navigation and control keys that should not start editing.
-  //   const allowedKeys = [
-  //     "ArrowLeft",
-  //     "ArrowRight",
-  //     "ArrowUp",
-  //     "ArrowDown",
-  //     "Tab",
-  //     "Escape",
-  //     "PageUp",
-  //     "PageDown",
-  //     "Home",
-  //     "End"
-  //   ];
-    
-  //   if (allowedKeys.includes(event.key)) {
-  //     return false;
-  //   }
-    
-  //   // Also explicitly check for keys that can start editing.
-  //   // If the key is a single printable character, it would normally trigger editing.
-  //   if (event.key.length === 1) {
-  //     return true;
-  //   }
-    
-  //   // Additionally, suppress Enter and F2, which are known to start editing.
-  //   if (event.key === "Enter" || event.key === "F2") {
-  //     return true;
-  //   }
-    
-  //   return false;
-  // }
 
   if (status === 'unauthenticated') {
     router.push('/api/auth/signin')
@@ -681,7 +574,7 @@ const Page = () => {
                   <Field.ErrorText>{errors.notes?.message && errors.notes?.message}</Field.ErrorText>
                 </Field.Root>
                 
-                <Button type="submit" disabled={requiredValuesForComponent.some(value => !fetched.current[value.name])} >Submit</Button>
+                <Button type="submit" disabled={fetchStatus !== 'success'} >Submit</Button>
               </form>
             </Accordion.ItemBody>
           </Accordion.ItemContent>
@@ -689,7 +582,7 @@ const Page = () => {
       </Accordion.Root>
 
       <Box display={"flex"} flexDirection={"column"} h='90vh'>
-        {requiredValuesForComponent.every(value => fetched.current[value.name]) ? (
+        {fetchStatus === 'success' ? (
           <>
             <Box mb={"4"} p={"2"}>
               <Heading size={'3xl'} mt={"4"} mr={'4'} display={"inline-block"}>Data</Heading>
@@ -721,16 +614,11 @@ const Page = () => {
             />
             
           </>
-        ) : Error ? (
+        ) : fetchStatus === 'error' ? (
           <>
             <h1>Something went wrong</h1>
 						<Button onClick={() => {
-              setError(false);
-              requiredValuesForComponent.forEach((value) => {
-                if (!fetched.current[value.name]) {
-                  value.function();
-                }
-              })          
+              setFetchStatus('loading');         
             }} w={"200px"}>Retry</Button>
           </>
         ) : (
