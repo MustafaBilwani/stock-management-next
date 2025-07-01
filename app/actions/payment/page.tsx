@@ -1,12 +1,11 @@
 'use client'
 
-import { CustomContext } from "@/context/states";
-import React, { startTransition, useCallback, useContext, useMemo, useRef } from "react";
+import React, { useCallback, useMemo, useRef } from "react";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { vendorPaymentType } from "@/app/types";
+import { vendorPaymentType, vendorType } from "@/app/types";
 import { addPayment, deletePayment, restorePayment } from "@/app/server-action/paymentActions";
 import { Accordion, Box, Button, Field, Heading, Input, Menu, NativeSelect, Portal, Span } from "@chakra-ui/react";
 import { IoMdMenu } from "react-icons/io";
@@ -15,7 +14,8 @@ import { AgGridReact } from 'ag-grid-react';
 import { SetFilterModule } from 'ag-grid-enterprise'
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { useFetch } from "@/app/useFetch";
+import { useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
+import { getQueryOptions } from "@/app/getQueryOptions";
 
 const schema = z.object({
 
@@ -33,13 +33,94 @@ const schema = z.object({
 const Page = () => {
   
   const router = useRouter()
-  const {status : authStatus} = useSession()
+  const {status: authStatus} = useSession()
 
-  const {
-		setVendors,
-    setVendorPaymentArray,
-    setOptimisticVendorPaymentArray
-	} = useContext(CustomContext);
+  const queryClient = useQueryClient()
+
+  const [
+    { data: paymentArray, isSuccess: paymentSuccess, isError: paymentError, refetch: refetchPayment },
+    { data: vendorsArray, isSuccess: vendorsSuccess, isError: vendorsError, refetch: refetchVendors }
+  ] = useQueries({
+    queries: [
+      getQueryOptions('payment'),
+      getQueryOptions('vendors')
+    ]
+  })
+
+  const isSuccess = paymentSuccess && vendorsSuccess
+  const isError = paymentError || vendorsError
+
+  const addPaymentMutation = useMutation({
+    mutationKey: ['add', 'payment'],
+    mutationFn: async (newPaymentAction: vendorPaymentType) => {
+      const result = await addPayment(newPaymentAction)
+      if (!result?.success) throw new Error('error occured')
+    },
+    onSuccess: (_result, newPaymentAction) => {
+      queryClient.setQueryData(['fetch', 'payment'], (prev: vendorPaymentType[]) => [...prev, newPaymentAction])
+      queryClient.setQueryData(['fetch', 'vendors'], (prev: vendorType[]) => {
+        return prev.map(vendor =>
+          vendor.id === newPaymentAction.vendor
+            ? { ...vendor, balance: vendor.balance - newPaymentAction.amount } // add to credit
+            : vendor
+        )
+      })
+    }
+  })
+
+  const deletePaymentMutation = useMutation({
+    mutationKey: ['delete', 'payment'],
+    mutationFn: async (paymentAction: vendorPaymentType) => {
+      const result = await deletePayment(paymentAction)
+      if (!result?.success) throw new Error('error occured')
+    },
+    onSuccess: (_result, paymentAction) => {
+      queryClient.setQueryData(['fetch', 'payment'], (prev: vendorPaymentType[]) => {
+        return prev.map((action) =>
+          action.id === paymentAction.id
+            ? { ...action, active: false }
+            : action
+        )
+      })
+      queryClient.setQueryData(['fetch', 'vendors'], (prev: vendorType[]) => {
+        return prev.map(vendor =>
+          vendor.id === paymentAction.vendor
+          ? { ...vendor, balance: vendor.balance + paymentAction.amount } // delete from credit
+            : vendor
+        )
+      })
+    },
+    onError: (error) => {
+      console.log(error)
+    }
+  })
+
+  const restorePaymentMutation = useMutation({
+    mutationKey: ['restore', 'payment'],
+    mutationFn: async (paymentAction: vendorPaymentType) => {
+      const result = await restorePayment(paymentAction)
+      if (!result?.success) throw new Error('error occured')
+    },
+    onSuccess: (_result, paymentAction) => {
+      queryClient.setQueryData(['fetch', 'payment'], (prev: vendorPaymentType[]) => {
+        return prev.map((action) =>
+          action.id === paymentAction.id
+            ? { ...action, active: true }
+            : action
+        )
+      })
+      queryClient.setQueryData(['fetch', 'vendors'], (prev: vendorType[]) => {
+        return prev.map(vendor =>
+          vendor.id === paymentAction.vendor
+            ? { ...vendor, balance: vendor.balance - paymentAction.amount } // add to credit
+            : vendor
+        )
+      })
+    },
+    onError: (error) => {
+      console.log(error)
+    }
+  })
   
   const {
     register,
@@ -49,50 +130,17 @@ const Page = () => {
   } = useForm({
     resolver: zodResolver(schema),
   });
-  
-  const {
-    optimisticVendors,
-    optimisticVendorPaymentArray,
-    fetchStatus,
-    setFetchStatus
-  } = useFetch([ "vendors", "payment" ]);
 
   async function handleDeletePayment(id: string) {
     if (!window.confirm("Are you sure you want to delete?")) return;
+    if (!isSuccess) {console.log('no data abondoning operation'); return};
 
-    startTransition(() => {
-      setOptimisticVendorPaymentArray((prev) =>
-        prev.map((action) =>
-          action.id === id ? { ...action, active: false } : action
-        )
-      );
-    });
+    const currentAction = paymentArray.find(action => action.id === id);
+    if (!currentAction) return;
 
-    const data = new Promise<void>(async (resolve, reject) => {
-      const currentAction = optimisticVendorPaymentArray.find(action => action.id === id);
-      if (!currentAction) return;
-      const response = await deletePayment(currentAction);
-      if (response.success) {
-        setVendorPaymentArray((prev) =>
-          prev.map((action) =>
-            action.id === id ? { ...action, active: false } : action
-          )
-        );
-        setVendors(prev =>
-          prev.map(vendor =>
-            vendor.id === currentAction.vendor
-              ? { ...vendor, balance: vendor.balance + currentAction.amount } // delete from credit
-              : vendor
-          )
-        );
-        resolve();
-      } else {
-        console.log(response?.error);
-        reject()
-      }
-    });
+    const promise = deletePaymentMutation.mutateAsync(currentAction);
 
-    toaster.promise(data, {
+    toaster.promise(promise, {
       success: {
         title: "Operation successful",
         description: "Payment deleted successfully",
@@ -108,39 +156,11 @@ const Page = () => {
   async function handleRestorePayment(id: string) {
     if (!window.confirm("Are you sure you want to restore?")) return;
 
-    startTransition(() => {
-      setOptimisticVendorPaymentArray((prev) =>
-        prev.map((action) =>
-          action.id === id ? { ...action, active: true } : action
-        )
-      );
-    });
+    const currentAction = paymentArray?.find(action => action.id === id);
+    if (!currentAction) return;
+    const promise = restorePaymentMutation.mutateAsync(currentAction);
 
-    const data = new Promise<void>(async (resolve, reject) => {
-      const currentAction = optimisticVendorPaymentArray.find(action => action.id === id);
-      if (!currentAction) return;
-      const response = await restorePayment(currentAction);
-      if (response.success) {
-        setVendorPaymentArray((prev) =>
-          prev.map((action) =>
-            action.id === id ? { ...action, active: true } : action
-          )
-        );
-        setVendors(prev =>
-          prev.map(vendor =>
-            vendor.id === currentAction.vendor
-              ? { ...vendor, balance: vendor.balance - currentAction.amount } // add to credit
-              : vendor
-          )
-        );
-        resolve();
-      } else {
-        console.log(response?.error);
-        reject()
-      }
-    });
-
-    toaster.promise(data, {
+    toaster.promise(promise, {
       success: {
         title: "Operation successful",
         description: "Payment restored successfully",
@@ -156,11 +176,12 @@ const Page = () => {
   async function handleAddPayment(
     newPayment: Omit<vendorPaymentType, 'id' | 'type' | 'active' | 'vendorName'>
   ) {
+    if (!isSuccess) {console.log('no data abondoning operation'); return};
 
     const processedNewPayment: vendorPaymentType = {
       ...newPayment,
       vendor: newPayment.vendor,
-      vendorName: optimisticVendors.find(vendor => vendor.id === newPayment.vendor)?.name || '',
+      vendorName: vendorsArray.find(vendor => vendor.id === newPayment.vendor)?.name || '',
       id: Date.now().toString(),
       type: 'payment',
       active: true
@@ -168,31 +189,9 @@ const Page = () => {
 
     reset()
 
-    startTransition(() => {
-      setOptimisticVendorPaymentArray((prev) =>
-        [...prev, processedNewPayment]
-      );
-    });
+    const promise = addPaymentMutation.mutateAsync(processedNewPayment);
 
-    const data = new Promise<void>(async (resolve, reject) => {
-      const response = await addPayment(processedNewPayment);
-      if (response.success) {
-        setVendorPaymentArray(prev => [...prev, processedNewPayment])
-        setVendors(prev =>
-          prev.map(vendor =>
-            vendor.id === processedNewPayment.vendor
-              ? { ...vendor, balance: vendor.balance - processedNewPayment.amount } // add to credit
-              : vendor
-          )
-        );
-        resolve()
-      } else {
-        console.log(response.error)
-        reject()
-      }
-    })
-
-    toaster.promise(data, {
+    toaster.promise(promise, {
       success: {
         title: "Operation successful",
         description: "Payment action added successfully",
@@ -304,84 +303,86 @@ const Page = () => {
 	return ( 
     <Box display={"flex"} flexDirection={"column"} width={"95%"} m={"6"}>
       <Heading size={'3xl'}>Payment</Heading>
-      <Accordion.Root collapsible width={'80%'}>
-        <Accordion.Item key={'form'} value={'form'}>
-          <Accordion.ItemTrigger bg={"gray.100"} p={"2"}>
-            <Span flex="1">Form</Span>
-            <Accordion.ItemIndicator />
-          </Accordion.ItemTrigger>
-          <Accordion.ItemContent>
-            <Accordion.ItemBody>
-              <Heading size={'2xl'}>New Entry</Heading>
-              <form onSubmit={handleSubmit((data) => handleAddPayment(data))}>
+      {isSuccess && (
+        <Accordion.Root collapsible width={'80%'}>
+          <Accordion.Item key={'form'} value={'form'}>
+            <Accordion.ItemTrigger bg={"gray.100"} p={"2"}>
+              <Span flex="1">Form</Span>
+              <Accordion.ItemIndicator />
+            </Accordion.ItemTrigger>
+            <Accordion.ItemContent>
+              <Accordion.ItemBody>
+                <Heading size={'2xl'}>New Entry</Heading>
+                <form onSubmit={handleSubmit((data) => handleAddPayment(data))}>
 
-                <Field.Root invalid={!!errors.amount?.message} mb={"2"}>
-                  <Field.Label>Amount</Field.Label>
-                  <Input 
-                    {...register('amount', { valueAsNumber: true })} 
-                    border={"4"}
-                    borderColor={"black"}
-                    padding={2}
-                    type="number"
-                  />
-                  <Field.ErrorText>{errors.amount?.message}</Field.ErrorText>
-                </Field.Root>
+                  <Field.Root invalid={!!errors.amount?.message} mb={"2"}>
+                    <Field.Label>Amount</Field.Label>
+                    <Input 
+                      {...register('amount', { valueAsNumber: true })} 
+                      border={"4"}
+                      borderColor={"black"}
+                      padding={2}
+                      type="number"
+                    />
+                    <Field.ErrorText>{errors.amount?.message}</Field.ErrorText>
+                  </Field.Root>
 
-                <Field.Root invalid={!!errors.vendor?.message} mb={"2"}>
-                  <Field.Label>Vendor</Field.Label>
-                  <NativeSelect.Root
-                    display={"inline-block"}
-                    >
-                    <NativeSelect.Field
-                      {...register('vendor')}
-                      borderColor={'gray.400'}
-                      h={'8'}
-                      defaultValue={''}
-                    >
-                      <option hidden value={''}>Select Vendor</option>
-                      {optimisticVendors.filter(vendor => vendor.active).map(vendor => (
-                        <option key={vendor.id} value={vendor.id}>
-                          {vendor.name}
-                        </option>
-                      ))}
-                    </NativeSelect.Field>
-                    <NativeSelect.Indicator/>
-                  </NativeSelect.Root>
-                  <Field.ErrorText>{errors.vendor?.message && errors.vendor?.message}</Field.ErrorText>
-                </Field.Root>
+                  <Field.Root invalid={!!errors.vendor?.message} mb={"2"}>
+                    <Field.Label>Vendor</Field.Label>
+                    <NativeSelect.Root
+                      display={"inline-block"}
+                      >
+                      <NativeSelect.Field
+                        {...register('vendor')}
+                        borderColor={'gray.400'}
+                        h={'8'}
+                        defaultValue={''}
+                      >
+                        <option hidden value={''}>Select Vendor</option>
+                        {vendorsArray.filter(vendor => vendor.active).map(vendor => (
+                          <option key={vendor.id} value={vendor.id}>
+                            {vendor.name}
+                          </option>
+                        ))}
+                      </NativeSelect.Field>
+                      <NativeSelect.Indicator/>
+                    </NativeSelect.Root>
+                    <Field.ErrorText>{errors.vendor?.message && errors.vendor?.message}</Field.ErrorText>
+                  </Field.Root>
 
-                <Field.Root invalid={!!errors.date?.message} mb={"2"}>
-                  <Field.Label>Date</Field.Label>
-                  <Input
-                    {...register('date')}
-                    border={"4"}
-                    borderColor={"black"}
-                    padding={2}
-                    type="date"
-                    defaultValue={new Date().toISOString().split('T')[0]}
-                  />
-                  <Field.ErrorText>{errors.date?.message && errors.date?.message}</Field.ErrorText>
-                </Field.Root>
+                  <Field.Root invalid={!!errors.date?.message} mb={"2"}>
+                    <Field.Label>Date</Field.Label>
+                    <Input
+                      {...register('date')}
+                      border={"4"}
+                      borderColor={"black"}
+                      padding={2}
+                      type="date"
+                      defaultValue={new Date().toISOString().split('T')[0]}
+                    />
+                    <Field.ErrorText>{errors.date?.message && errors.date?.message}</Field.ErrorText>
+                  </Field.Root>
 
-                <Field.Root invalid={!!errors.notes?.message} mb={"2"}>
-                  <Field.Label>Notes</Field.Label>
-                  <Input
-                    {...register('notes')}
-                    border={"4"}
-                    borderColor={"black"}
-                    padding={2}
-                  />
-                  <Field.ErrorText>{errors.notes?.message && errors.notes?.message}</Field.ErrorText>
-                </Field.Root>
-                
-                <Button type="submit" disabled={fetchStatus !== 'success'} >Submit</Button>
-              </form>                
-            </Accordion.ItemBody>
-          </Accordion.ItemContent>
-        </Accordion.Item>
-      </Accordion.Root>
+                  <Field.Root invalid={!!errors.notes?.message} mb={"2"}>
+                    <Field.Label>Notes</Field.Label>
+                    <Input
+                      {...register('notes')}
+                      border={"4"}
+                      borderColor={"black"}
+                      padding={2}
+                    />
+                    <Field.ErrorText>{errors.notes?.message && errors.notes?.message}</Field.ErrorText>
+                  </Field.Root>
+                  
+                  <Button type="submit" disabled={!isSuccess} >Submit</Button>
+                </form>                
+              </Accordion.ItemBody>
+            </Accordion.ItemContent>
+          </Accordion.Item>
+        </Accordion.Root>
+      )}
       <Box display={"flex"} flexDirection={"column"} h='90vh'>
-        {fetchStatus === 'success' ? (
+        {isSuccess ? (
           <>
             <Box mb={"4"} p={"2"}>
               <Heading size={'3xl'} mt={"4"} mr={'4'} display={"inline-block"}>Data</Heading>
@@ -396,17 +397,18 @@ const Page = () => {
             <AgGridReact
               ref={gridRef}
               columnDefs={colDefs}
-              rowData={optimisticVendorPaymentArray}
+              rowData={paymentArray}
               suppressDragLeaveHidesColumns
               getRowClass={getRowClass}
               initialState={initialState}
             />
           </>
-        ) : fetchStatus === 'error' ? (
+        ) : isError ? (
           <>
             <h1>Something went wrong</h1>
 						<Button onClick={() => {
-              setFetchStatus('loading');        
+              refetchPayment()
+              refetchVendors()
             }} w={"200px"}>Retry</Button>
           </>
         ) : (

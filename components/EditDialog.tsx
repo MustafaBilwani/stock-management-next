@@ -1,12 +1,13 @@
 import { Button, CloseButton, Dialog, Field, Heading, Input, NativeSelect, Portal } from '@chakra-ui/react'
-import React, { useContext } from 'react'
+import React from 'react'
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { CustomContext } from '@/context/states';
+import { useQueries } from '@tanstack/react-query';
+import { getQueryOptions } from '@/app/getQueryOptions';
 
 
-const EditDialog = ({isEditing, rowData, handleEditComingAction} : {
+const EditDialog = ({isEditing, rowData, handleEditComingAction, abortEditiing} : {
   isEditing: boolean,
   rowData: undefined | {
     id: string,
@@ -24,13 +25,19 @@ const EditDialog = ({isEditing, rowData, handleEditComingAction} : {
     product: string,
     date: string,
     notes: string
-  }) => void
+  }) => void,
+  abortEditiing: () => void
 }) => {
 
-  const {
-    optimisticProducts,
-    optimisticVendors
-  } = useContext(CustomContext);
+  const [
+    { data: productsArray, isSuccess: productsSuccess },
+    { data: vendorsArray, isSuccess: vendorsSuccess }
+  ] = useQueries({
+    queries: [
+      getQueryOptions('products'),
+      getQueryOptions('vendors')
+    ]
+  })
 
 
   const formSchema = z.object({
@@ -70,7 +77,7 @@ const EditDialog = ({isEditing, rowData, handleEditComingAction} : {
             <Dialog.Header>
               <Dialog.Title>Dialog Title</Dialog.Title>
             </Dialog.Header>
-            {rowData ? (
+            {rowData && productsSuccess && vendorsSuccess ? (
               <form onSubmit={handleSubmit((data) => handleEditComingAction(data))}>
                 <Dialog.Body>
                   {JSON.stringify(rowData)}
@@ -114,7 +121,7 @@ const EditDialog = ({isEditing, rowData, handleEditComingAction} : {
                       defaultValue={rowData.vendor}
                     >
                       <option hidden value={''}>Select Vendor</option>
-                      {optimisticVendors.filter(vendor => vendor.active).map(vendor => (
+                      {vendorsArray.filter(vendor => vendor.active).map(vendor => (
                         <option key={vendor.id} value={vendor.id}>
                           {vendor.name}
                         </option>
@@ -137,7 +144,7 @@ const EditDialog = ({isEditing, rowData, handleEditComingAction} : {
                       defaultValue={rowData.product}
                     >
                       <option hidden value={''}>Select Product</option>
-                      {optimisticProducts.filter(product => product.active).map(product => (
+                      {productsArray.filter(product => product.active).map(product => (
                         <option key={product.id} value={product.id}>
                           {product.name}
                         </option>
@@ -175,7 +182,7 @@ const EditDialog = ({isEditing, rowData, handleEditComingAction} : {
                 </Dialog.Body>
                 <Dialog.Footer>
                   <Dialog.ActionTrigger asChild>
-                    <Button variant="outline">Cancel</Button>
+                    <Button variant="outline" onClick={abortEditiing}>Cancel</Button>
                   </Dialog.ActionTrigger>
                   <Button type="submit">Save</Button>
                 </Dialog.Footer>
@@ -184,7 +191,7 @@ const EditDialog = ({isEditing, rowData, handleEditComingAction} : {
               <Dialog.Body>No data</Dialog.Body>
             )}
             <Dialog.CloseTrigger asChild>
-              <CloseButton size="sm" />
+              <CloseButton size="sm" onClick={abortEditiing} />
             </Dialog.CloseTrigger>
           </Dialog.Content>
         </Dialog.Positioner>

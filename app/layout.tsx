@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { Store } from "@/context/states";
 import Navbar from "@/components/Navbar";
 import { Provider } from "@/components/ui/provider";
 import SessionProviderWrapper from "./SessionProviderWrapper";
+import QueryProvider from "./QueryProvider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -33,12 +33,12 @@ export default async function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <SessionProviderWrapper>
-          <Store>
+          <QueryProvider>
             <Provider>
               <Navbar />
               {children}
             </Provider>
-          </Store>
+          </QueryProvider>
         </SessionProviderWrapper>
       </body>
     </html>

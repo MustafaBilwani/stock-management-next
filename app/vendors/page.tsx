@@ -1,35 +1,84 @@
 "use client";
 
-import { CustomContext } from "@/context/states";
-import React, { startTransition, useContext, useState } from "react";
+import React, { useState } from "react";
 import { vendorType } from "@/app/types";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { Accordion, Box, Button, Heading, Input, Menu, NativeSelect, Portal, Table } from "@chakra-ui/react";
-import { addVendor, restoreVendor, deleteVendor, checkVendorAllowedToDelete } from "../server-action/vendorActions";
+import { addVendor, checkVendorAllowedToDelete, deleteVendor, restoreVendor } from "../server-action/vendorActions";
 import { IoMdMenu } from "react-icons/io";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { useFetch } from "../useFetch";
+import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
+import { getQueryOptions } from "../getQueryOptions";
 
 const Page = () => {
-	
-	const router = useRouter()
-	const {status} = useSession()
 
-  const { 
-		setOptimisticVendors,
-		setVendors
-	} = useContext(CustomContext);
+	const router = useRouter()
+	const { status: authStatus } = useSession()
 
 	const [InputValue, setInputValue] = useState('')
 	const [filter, setFilter] = useState('active');
 
-  	const {
-		optimisticComingActionArray, optimisticVendors, optimisticVendorPaymentArray,
-		fetchStatus, setFetchStatus
-	} = useFetch(['vendors', 'coming', 'payment']);
+	const [
+		{ data: vendors, isSuccess: vendorsSuccess, isError: vendorsError, refetch: refetchVendors },
+		{ data: comingActionArray, isSuccess: comingSuccess, isError: comingError, refetch: refetchComing },
+		{ data: vendorPaymentArray, isSuccess: paymentSuccess, isError: paymentError, refetch: refetchPayment }
+	] = useQueries({
+		queries: [
+			getQueryOptions('vendors'),
+			getQueryOptions('coming'),
+			getQueryOptions('payment'),
+		]
+	})
 
-	const checkDuplicateName = (newName: string) => (optimisticVendors.filter(vendor => vendor.active).some(vendor => (vendor.name.toLowerCase() === newName.toLowerCase())))
+	const queryClient = useQueryClient()
+
+	const addVendorMutation = useMutation({
+		mutationKey: ['add', 'vendor'],
+		mutationFn: async (newVendor: vendorType) => {
+			const result = await addVendor(newVendor)
+			if (!result?.success) throw new Error('error occured')
+		},
+		onSuccess: (_result, newVendor) => {
+			queryClient.setQueryData(['fetch', 'vendors'], (prev: vendorType[]) => {
+				return [...prev, newVendor]
+			})
+		}
+	})
+
+	const deleteVendorMutation = useMutation({
+		mutationKey: ['delete', 'vendor'],
+		mutationFn: async (id: string) => {
+			const result = await deleteVendor(id)
+			if (!result?.success) throw new Error('error occured')
+		},
+		onSuccess: (_result, id) => {
+			queryClient.setQueryData(['fetch', 'vendors'], (prev: vendorType[]) => {
+				return prev.map(vendor => vendor.id === id ? { ...vendor, active: false } : vendor)
+			})
+		}
+	})
+
+	const restoreVendorMutation = useMutation({
+		mutationKey: ['restore', 'vendor'],
+		mutationFn: async (id: string) => {
+			const result = await restoreVendor(id)
+			if (!result?.success) throw new Error('error occured')
+		},
+		onSuccess: (_result, id) => {
+			queryClient.setQueryData(['fetch', 'vendors'], (prev: vendorType[]) => {
+				return prev.map(vendor => vendor.id === id ? { ...vendor, active: true } : vendor)
+			})
+		}
+	})
+
+	const isSuccess = vendorsSuccess && comingSuccess && paymentSuccess
+	const isError = vendorsError || comingError || paymentError
+
+	const checkDuplicateName = (newName: string) => (vendors!
+		.filter(vendor => vendor.active)
+		.some(vendor => vendor.name.toLowerCase() === newName.toLowerCase())
+	)
 
 	async function handleAddVendor() {
 
@@ -56,25 +105,12 @@ const Page = () => {
 			id: Date.now().toString(),
 			name: newName,
 			active: true,
-      		balance: 0
+			balance: 0
 		};
 
-		startTransition(() => {
-			setOptimisticVendors(prev => [...prev, newVendor]);
-		})
-		
-		const data = new Promise<void>(async (resolve, reject) => {
-			const response = await addVendor(newVendor);
-			if (response.success) {
-				setVendors(prev => [...prev, newVendor])
-				resolve()
-			} else {
-				console.log(response.error)
-				reject()
-			}
-		})
+		const promise = addVendorMutation.mutateAsync(newVendor)
 
-		toaster.promise(data, {
+		toaster.promise(promise, {
 			success: {
 				title: "Operation successful",
 				description: "Vendor added successfully",
@@ -99,7 +135,7 @@ const Page = () => {
 			})
 			return
 		}
-		
+
 		if (!allowed?.allowed) {
 			toaster.create({
 				title: "Vendor cannot be deleted",
@@ -108,23 +144,10 @@ const Page = () => {
 			})
 			return
 		}
-		
-		startTransition(() => {
-			setOptimisticVendors(prev => prev.map(vendor => vendor.id === id ? {...vendor, active: false} : vendor));
-		})
-		
-		const data = new Promise<void>(async (resolve, reject) => {
-			const response = await deleteVendor(id);
-			if (response.success) {
-				setVendors(prev => prev.map(vendor => vendor.id === id ? {...vendor, active: false} : vendor));
-				resolve()
-			} else {
-				console.log(response.error)
-				reject()
-			}
-		})
-		
-		toaster.promise(data, {
+
+		const promise = deleteVendorMutation.mutateAsync(id);
+
+		toaster.promise(promise, {
 			success: {
 				title: "Operation successful",
 				description: "Vendor deleted successfully",
@@ -140,7 +163,7 @@ const Page = () => {
 	async function handleRestoreVendor(id: string) {
 		if (!window.confirm('are you sure you want to restore')) return
 
-		const newName = optimisticVendors.find(vendor => vendor.id === id)?.name
+		const newName = vendors!.find(vendor => vendor.id === id)?.name
 
 		if (typeof newName !== 'string') return
 
@@ -153,21 +176,9 @@ const Page = () => {
 			return
 		}
 
-		startTransition(() => {
-			setOptimisticVendors(prev => prev.map(vendor => vendor.id === id ? {...vendor, active: true} : vendor));
-		})		
+		const promise = restoreVendorMutation.mutateAsync(id);
 		
-		const data = new Promise<void>(async (resolve, reject) => {
-			const response = await restoreVendor(id);
-			if (response.success) {
-				setVendors(prev => prev.map(vendor => vendor.id === id ? {...vendor, active: true} : vendor));
-				resolve()
-			} else {
-				console.log(response.error)
-				reject()
-			}
-		})
-		toaster.promise(data, {
+		toaster.promise(promise, {
 			success: {
 				title: "Operation successful",
 				description: "Vendor restored successfully",
@@ -180,169 +191,175 @@ const Page = () => {
 		})
 	}
 
-	if (status === 'unauthenticated') {
+	if (authStatus === 'unauthenticated') {
 		router.push('/api/auth/signin')
 		return <p>Unauthorized</p>
 	}
 
-	if (status === 'loading') {
+	if (authStatus === 'loading') {
 		return <p>Loading...</p>;
 	}
 
-	return ( 
-    <Box display={"flex"} flexDirection={"row"} width={"100%"} my={"4"}>
-      	<Box display={"flex"} flexDirection={"column"} width={"1/2"} px={"4"}>
-			<Input
-			type="text"
-			placeholder="Enter Vendor Name"
-			className="border-2 p-2 w-full"
-			value={InputValue}
-			onChange={(e) => setInputValue(e.target.value)}
-				onKeyDown={(e) => e.key === 'Enter' && handleAddVendor()}
-				disabled={fetchStatus !== 'success'} 
-				border={"4"}
-				borderColor={"black"}
-				padding={2}
-				mb='2'
-			/>
-			<Button onClick={handleAddVendor} disabled={fetchStatus !== 'success'} variant="solid" colorPalette={"blue"}>
-			Add Vendor
-			</Button>
+	return (
+		<Box display={"flex"} flexDirection={"row"} width={"100%"} my={"4"}>
+			<Box display={"flex"} flexDirection={"column"} width={"1/2"} px={"4"}>
+				<Input
+					type="text"
+					placeholder="Enter Vendor Name"
+					className="border-2 p-2 w-full"
+					value={InputValue}
+					onChange={(e) => setInputValue(e.target.value)}
+					onKeyDown={(e) => e.key === 'Enter' && handleAddVendor()}
+					disabled={!vendorsSuccess}
+					border={"4"}
+					borderColor={"black"}
+					padding={2}
+					mb='2'
+				/>
+				<Button onClick={handleAddVendor} disabled={!vendorsSuccess} variant="solid" colorPalette={"blue"}>
+					Add Vendor
+				</Button>
 
-			{fetchStatus === 'success' ? (
-				<>
-					{Array.from(new Set(optimisticVendors)).filter(vendor => {
-						if (filter === 'active') return vendor.active;
-						if (filter === 'inactive') return !vendor.active;
-						return true;
-					}).map(vendor => (
-						<Accordion.Root collapsible width={'80%'} key={vendor.id}>
-							<Accordion.Item key={'form'} value={vendor.id}>
-								<Accordion.ItemTrigger bg={"gray.100"} p={"2"}>
-									<Heading size={'md'}>{vendor.name}</Heading>			
-									<Accordion.ItemIndicator />
-								</Accordion.ItemTrigger>
-
-								<Accordion.ItemContent>
-									<Accordion.ItemBody>
-										<Table.Root colorScheme="teal"  size={"sm"} variant='outline' striped>
-											<Table.Header>
-												<Table.Row>
-													<Table.ColumnHeader>Date</Table.ColumnHeader>
-													<Table.ColumnHeader>Action</Table.ColumnHeader>
-													<Table.ColumnHeader>Debit</Table.ColumnHeader>
-													<Table.ColumnHeader>Credit</Table.ColumnHeader>
-												</Table.Row>
-											</Table.Header>
-											<Table.Body>
-												{[...optimisticComingActionArray, ...optimisticVendorPaymentArray].filter(action => 
-													(action.vendor === vendor.id && action.active)
-												).map(action => (
-
-													<Table.Row key={action.id}>
-														<Table.Cell>{action.date}</Table.Cell>
-														<Table.Cell>{action.type === 'coming' ? 'Purchase made' : 'Payment'}</Table.Cell>
-														<Table.Cell>{action.type === 'coming' ? action.priceTotal : ''}</Table.Cell>
-														<Table.Cell>{action.type === 'payment' ? action.amount : ''}</Table.Cell>
-													</Table.Row>
-										
-												))}
-											</Table.Body>
-										</Table.Root>
-									</Accordion.ItemBody>
-								</Accordion.ItemContent>
-							</Accordion.Item>
-						</Accordion.Root>
-					))}
-				</>
-			) : fetchStatus === 'error' ? (
-				<>
-					<h1>Something went wrong</h1>
-					<Button onClick={() => {
-						setFetchStatus('loading');       
-					}} w={"200px"}>Retry</Button>
-				</>
-			) : (
-				<h1>Loading...</h1>
-			)}
-		</Box>
-      	<Box display={"flex"} flexDirection={"column"} width={"1/2"} px={"4"}>
-			{fetchStatus === 'success'  ? (
-				<>		
-
-				<Box mb={"4"} p={"2"}>
-					<label className="mr-2 font-medium">Filter:</label>
-					<NativeSelect.Root
-						display={"inline-block"}
-						width={"200px"}
-						ml={"4"}
-						>
-						<NativeSelect.Field
-							value={filter}
-							onChange={e => setFilter(e.target.value)}
-							borderColor={'gray.400'}
-							h={'8'}
-						>
-							<option value="all">All</option>
-							<option value="active">Active</option>
-							<option value="inactive">Deleted</option>
-						</NativeSelect.Field>
-						<NativeSelect.Indicator/>
-					</NativeSelect.Root>
-				</Box>
-
-				<Table.Root colorScheme="teal"  size={"sm"} variant='outline' striped>
-					<Table.Header>
-						<Table.Row>
-							<Table.ColumnHeader>Vendor Name</Table.ColumnHeader>
-							<Table.ColumnHeader>Balance</Table.ColumnHeader>
-							<Table.ColumnHeader></Table.ColumnHeader>
-						</Table.Row>
-					</Table.Header>
-					<Table.Body>
-						{Array.from(new Set(optimisticVendors)).filter(vendor => {
+				{isSuccess ? (
+					<>
+						{Array.from(new Set(vendors)).filter(vendor => {
 							if (filter === 'active') return vendor.active;
 							if (filter === 'inactive') return !vendor.active;
 							return true;
 						}).map(vendor => (
+							<Accordion.Root collapsible width={'80%'} key={vendor.id}>
+								<Accordion.Item key={'form'} value={vendor.id}>
+									<Accordion.ItemTrigger bg={"gray.100"} p={"2"}>
+										<Heading size={'md'}>{vendor.name}</Heading>
+										<Accordion.ItemIndicator />
+									</Accordion.ItemTrigger>
 
-								<Table.Row key={vendor.id} color={vendor.active ? 'black' : 'red'}>
-									<Table.Cell>{vendor.name}</Table.Cell>
-									<Table.Cell>{vendor.active ? vendor.balance : "Deleted"}</Table.Cell>
-									<Table.Cell>
-									<Menu.Root>
-											<Menu.Trigger asChild><IoMdMenu /></Menu.Trigger>
-											<Portal>
-												<Menu.Positioner>
-													<Menu.Content>
-														<Menu.Item value="" onClick={() => vendor.active ?
-															handleDeleteVendor(vendor.id) : handleRestoreVendor(vendor.id)
-														}>
-															{vendor.active ? 'Delete' : 'Restore' }
-														</Menu.Item>
-													</Menu.Content>
-												</Menu.Positioner>
-											</Portal>
-										</Menu.Root>
-									</Table.Cell>
-								</Table.Row>
-							
+									<Accordion.ItemContent>
+										<Accordion.ItemBody>
+											<Table.Root colorScheme="teal" size={"sm"} variant='outline' striped>
+												<Table.Header>
+													<Table.Row>
+														<Table.ColumnHeader>Date</Table.ColumnHeader>
+														<Table.ColumnHeader>Action</Table.ColumnHeader>
+														<Table.ColumnHeader>Debit</Table.ColumnHeader>
+														<Table.ColumnHeader>Credit</Table.ColumnHeader>
+													</Table.Row>
+												</Table.Header>
+												<Table.Body>
+													{[...comingActionArray, ...vendorPaymentArray].filter(action =>
+														(action.vendor === vendor.id && action.active)
+													).map(action => (
+
+														<Table.Row key={action.id}>
+															<Table.Cell>{action.date}</Table.Cell>
+															<Table.Cell>{action.type === 'coming' ? 'Purchase made' : 'Payment'}</Table.Cell>
+															<Table.Cell>{action.type === 'coming' ? action.priceTotal : ''}</Table.Cell>
+															<Table.Cell>{action.type === 'payment' ? action.amount : ''}</Table.Cell>
+														</Table.Row>
+
+													))}
+												</Table.Body>
+											</Table.Root>
+										</Accordion.ItemBody>
+									</Accordion.ItemContent>
+								</Accordion.Item>
+							</Accordion.Root>
 						))}
-					</Table.Body>
-				</Table.Root>
-				</>
-			) : fetchStatus === 'error' ? (
-				<>
-					<h1>Something went wrong</h1>
-					<Button onClick={() => {setFetchStatus('loading');}} w={"200px"}>Retry</Button>
-				</>
-			) : (
-				<h1>Loading...</h1>
-			)}
-      	</Box>
+					</>
+				) : isError ? (
+					<>
+						<h1>Something went wrong</h1>
+						<Button onClick={() => {
+							refetchVendors()
+							refetchComing()
+							refetchPayment()
+						}} w={"200px"}>Retry</Button>
+					</>
+				) : (
+					<h1>Loading...</h1>
+				)}
+			</Box>
+			<Box display={"flex"} flexDirection={"column"} width={"1/2"} px={"4"}>
+				{vendorsSuccess ? (
+					<>
+
+						<Box mb={"4"} p={"2"}>
+							<label className="mr-2 font-medium">Filter:</label>
+							<NativeSelect.Root
+								display={"inline-block"}
+								width={"200px"}
+								ml={"4"}
+							>
+								<NativeSelect.Field
+									value={filter}
+									onChange={e => setFilter(e.target.value)}
+									borderColor={'gray.400'}
+									h={'8'}
+								>
+									<option value="all">All</option>
+									<option value="active">Active</option>
+									<option value="inactive">Deleted</option>
+								</NativeSelect.Field>
+								<NativeSelect.Indicator />
+							</NativeSelect.Root>
+						</Box>
+
+						<Table.Root colorScheme="teal" size={"sm"} variant='outline' striped>
+							<Table.Header>
+								<Table.Row>
+									<Table.ColumnHeader>Vendor Name</Table.ColumnHeader>
+									<Table.ColumnHeader>Balance</Table.ColumnHeader>
+									<Table.ColumnHeader></Table.ColumnHeader>
+								</Table.Row>
+							</Table.Header>
+							<Table.Body>
+								{Array.from(new Set(vendors)).filter(vendor => {
+									if (filter === 'active') return vendor.active;
+									if (filter === 'inactive') return !vendor.active;
+									return true;
+								}).map(vendor => (
+
+									<Table.Row key={vendor.id} color={vendor.active ? 'black' : 'red'}>
+										<Table.Cell>{vendor.name}</Table.Cell>
+										<Table.Cell>{vendor.active ? vendor.balance : "Deleted"}</Table.Cell>
+										<Table.Cell>
+											<Menu.Root>
+												<Menu.Trigger asChild><IoMdMenu /></Menu.Trigger>
+												<Portal>
+													<Menu.Positioner>
+														<Menu.Content>
+															<Menu.Item value="" onClick={() => vendor.active ?
+																handleDeleteVendor(vendor.id) : handleRestoreVendor(vendor.id)
+															}>
+																{vendor.active ? 'Delete' : 'Restore'}
+															</Menu.Item>
+														</Menu.Content>
+													</Menu.Positioner>
+												</Portal>
+											</Menu.Root>
+										</Table.Cell>
+									</Table.Row>
+
+								))}
+							</Table.Body>
+						</Table.Root>
+					</>
+				) : isError ? (
+					<>
+						<h1>Something went wrong</h1>
+						<Button onClick={() => {
+							refetchVendors()
+							refetchComing()
+							refetchPayment()
+						}} w={"200px"}>Retry</Button>
+					</>
+				) : (
+					<h1>Loading...</h1>
+				)}
+			</Box>
 			<Toaster />
-    </Box>
-  );
+		</Box>
+	);
 };
 
 export default Page;

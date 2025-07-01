@@ -1,14 +1,13 @@
 'use client'
 
-import { CustomContext } from "@/context/states";
-import React, { startTransition, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { Accordion, Box, Button, Field, Heading, Input, Menu, NativeSelect, Portal, Span } from "@chakra-ui/react";
 import { IoMdMenu } from "react-icons/io";
-import { set, useForm } from 'react-hook-form';
+import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { comingActionType } from "@/app/types";
+import { comingActionType, productType, vendorType } from "@/app/types";
 import { addComingAction, deleteComingAction, editComingAction, restoreComingAction } from "@/app/server-action/comingActions";
 import { AllCommunityModule, ColDef, ICellRendererParams, IFilterOptionDef, ModuleRegistry, RowClassParams, RowValueChangedEvent } from 'ag-grid-community';
 import { AgGridReact } from 'ag-grid-react';
@@ -16,47 +15,196 @@ import { SetFilterModule } from 'ag-grid-enterprise'
 import EditDialog from "@/components/EditDialog";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { useFetch } from "../../useFetch";
+import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
+import { getQueryOptions } from "@/app/getQueryOptions";
 
-const Page = () => {
-  
-  const router = useRouter()
-  const {status} = useSession()
-  const formSchema = z.object({
-    qty: z.number({
+const formSchema = z.object({
+  qty: z
+    .number({
       required_error: "Quantity is required",
       invalid_type_error: "Quantity must be a number and is required",
-    }).positive()
-      .int('Cannot be Decimal'),
-  
-    pricePerPcs: z.number({
+    })
+    .positive()
+    .int('Cannot be Fraction'),
+
+  pricePerPcs: z
+    .number({
       required_error: "Price is required",
       invalid_type_error: "Price must be a number and is required",
-    }).positive(),
-  
-    vendor: z.string().min(1, "Vendor is required"),
-  
-    product: z.string().min(1, "Product is required"),
-  
-    date: z.string().min(1, "Date is required"),
-    notes: z.string()
-  });
+    })
+    .positive(),
 
-  const {
-		setProducts,
-    setVendors,
-    setComingActionArray,
-    setOptimisticComingActionArray
-	} = useContext(CustomContext);
+  vendor: z
+    .string()
+    .min(1, "Vendor is required"),
 
-  const {
-    optimisticComingActionArray,
-    optimisticProducts,
-    optimisticVendors,
-    fetchStatus,
-    setFetchStatus
-  } = useFetch(['coming', 'products', "vendors"]);
-  
+  product: z
+    .string()
+    .min(1, "Product is required"),
+
+  date: z
+    .string()
+    .min(1, "Date is required"),
+
+  notes: z.string()
+});
+
+const Page = () => {
+
+  const router = useRouter()
+  const { status } = useSession()
+
+  const queryClient = useQueryClient()
+
+  const [
+    { data: comingActionArray, isSuccess: comingSuccess, isError: comingError, refetch: refetchComing },
+    { data: productsArray, isSuccess: productsSuccess, isError: productsError, refetch: refetchProducts },
+    { data: vendorsArray, isSuccess: vendorsSuccess, isError: vendorsError, refetch: refetchVendors }
+  ] = useQueries({
+    queries: [
+      getQueryOptions('coming'),
+      getQueryOptions('products'),
+      getQueryOptions('vendors')
+    ]
+  })
+
+  const isSuccess = comingSuccess && productsSuccess && vendorsSuccess
+  const isError = comingError || productsError || vendorsError
+
+  const addComingMutation = useMutation({
+    mutationKey: ['add', 'coming'],
+    mutationFn: async (newComingAction: comingActionType) => {
+      const result = await addComingAction(newComingAction)
+      if (!result?.success) throw new Error('error occured')
+    },
+    onSuccess: (_result, newComingAction) => {
+      queryClient.setQueryData(['fetch', 'coming'], (prev: comingActionType[]) => [...prev, newComingAction])
+      queryClient.setQueryData(['fetch', 'products'], (prev: productType[]) => {
+        return prev.map(product =>
+          product.id === newComingAction.product
+            ? { ...product, stock: product.stock + newComingAction.qty }
+            : product
+        )
+      });
+      queryClient.setQueryData(['fetch', 'vendors'], (prev: vendorType[]) => {
+        return prev.map(vendor =>
+          vendor.id === newComingAction.vendor
+            ? { ...vendor, balance: vendor.balance + newComingAction.priceTotal } // add in debit 
+            : vendor
+        )
+      })
+    }
+  })
+
+  const deleteComingMutation = useMutation({
+    mutationKey: ['delete', 'coming'],
+    mutationFn: async (comingAction: comingActionType) => {
+      const result = await deleteComingAction(comingAction)
+      if (!result?.success) throw new Error('error occured')
+    },
+    onSuccess: (_result, comingAction) => {
+      queryClient.setQueryData(['fetch', 'coming'], (prev: comingActionType[]) => {
+        return prev.map((action) =>
+          action.id === comingAction.id
+            ? { ...action, active: false }
+            : action
+        )
+      })
+      queryClient.setQueryData(['fetch', 'products'], (prev: productType[]) => {
+        return prev.map(product =>
+          product.id === comingAction.product
+            ? { ...product, stock: product.stock - comingAction.qty }
+            : product
+        )
+      })
+      queryClient.setQueryData(['fetch', 'vendors'], (prev: vendorType[]) => {
+        return prev.map(vendor =>
+          vendor.id === comingAction.vendor
+            ? { ...vendor, balance: vendor.balance - comingAction.priceTotal } // subtract from debit
+            : vendor
+        )
+      })
+    },
+    onError: (error) => {
+      console.log(error)
+    }
+  })
+
+  const restoreComingMutation = useMutation({
+    mutationKey: ['restore', 'coming'],
+    mutationFn: async (comingAction: comingActionType) => {
+      const result = await restoreComingAction(comingAction)
+      if (!result?.success) throw new Error('error occured')
+    },
+    onSuccess: (_result, comingAction) => {
+      queryClient.setQueryData(['fetch', 'coming'], (prev: comingActionType[]) => {
+        return prev.map((action) =>
+          action.id === comingAction.id
+            ? { ...action, active: true }
+            : action
+        )
+      })
+      queryClient.setQueryData(['fetch', 'products'], (prev: productType[]) => {
+        return prev.map(product =>
+          product.id === comingAction.product
+            ? { ...product, stock: product.stock + comingAction.qty }
+            : product
+        )
+      })
+      queryClient.setQueryData(['fetch', 'vendors'], (prev: vendorType[]) => {
+        return prev.map(vendor =>
+          vendor.id === comingAction.vendor
+            ? { ...vendor, balance: vendor.balance + comingAction.priceTotal } // add to debit
+            : vendor
+        )
+      })
+    },
+    onError: (error) => {
+      console.log(error)
+    }
+  })
+
+  const editComingMutation = useMutation({
+    mutationKey: ['edit', 'coming'],
+    mutationFn: async ({ newComingAction, oldComingAction }: { newComingAction: comingActionType, oldComingAction: comingActionType }) => {
+      const result = await editComingAction({ newComingAction, oldComingAction })
+      if (!result?.success) throw new Error('error occured')
+    },
+    onSuccess: (_result, { newComingAction, oldComingAction }: { newComingAction: comingActionType, oldComingAction: comingActionType }) => {
+      queryClient.setQueryData(['fetch', 'coming'], (prev: comingActionType[]) => {
+        return prev.map(action =>
+          action.id === newComingAction.id
+            ? newComingAction
+            : action
+        )
+      })
+      queryClient.setQueryData(['fetch', 'products'], (prev: productType[]) => {
+        return prev.map(prod => {
+          if (prod.id === oldComingAction.product && prod.id === newComingAction.product) {
+            return { ...prod, stock: prod.stock - oldComingAction.qty + newComingAction.qty };
+          }
+          if (prod.id === oldComingAction.product) { return { ...prod, stock: prod.stock - oldComingAction.qty }; }
+          if (prod.id === newComingAction.product) { return { ...prod, stock: prod.stock + newComingAction.qty }; }
+
+          return prod;
+        })
+      })
+      queryClient.setQueryData(['fetch', 'vendors'], (prev: vendorType[]) => {
+        return prev.map(vendor => {
+          if (vendor.id === oldComingAction.vendor && vendor.id === newComingAction.vendor) {
+            return { ...vendor, balance: vendor.balance - oldComingAction.priceTotal + newComingAction.priceTotal };
+          }
+          if (vendor.id === oldComingAction.vendor) return { ...vendor, balance: vendor.balance - oldComingAction.priceTotal }; // subtract from debit
+          if (vendor.id === newComingAction.vendor) return { ...vendor, balance: vendor.balance + newComingAction.priceTotal }; // add to debit
+          return vendor;
+        })
+      })
+    },
+    onError: (error) => {
+      console.log(error)
+    }
+  })
+
   const {
     register,
     handleSubmit,
@@ -65,7 +213,6 @@ const Page = () => {
   } = useForm({
     resolver: zodResolver(formSchema),
   });
-	const [Error, setError] = useState(false)
   const [isEditing, setIsEditing] = useState<boolean>(false)
   const [editingRowId, setEditingRowId] = useState<string | null>(null)
 
@@ -77,8 +224,9 @@ const Page = () => {
   async function handleEditComingAction(
     newComingAction: Omit<comingActionType, 'id' | 'type' | 'active' | 'productName' | 'vendorName' | 'priceTotal'>
   ) {
+    if (!isSuccess) { console.log('no data'); return; }
 
-    const oldComingAction = optimisticComingActionArray.find(action => action.id === editingRowId!);
+    const oldComingAction = comingActionArray.find(action => action.id === editingRowId!);
 
     if (!oldComingAction) return;
 
@@ -88,60 +236,15 @@ const Page = () => {
       type: 'coming',
       active: oldComingAction.active,
       priceTotal: newComingAction.pricePerPcs * newComingAction.qty,
-      productName: optimisticProducts.find(product => product.id === newComingAction.product)?.name || '',
-      vendorName: optimisticVendors.find(vendor => vendor.id === newComingAction.vendor)?.name || ''
+      productName: productsArray.find(product => product.id === newComingAction.product)?.name || '',
+      vendorName: vendorsArray.find(vendor => vendor.id === newComingAction.vendor)?.name || ''
     }
 
-    // reset()
+    const promise = editComingMutation.mutateAsync({ newComingAction: processedNewComingAction, oldComingAction: oldComingAction });
+    setIsEditing(false)
+    setEditingRowId(null)
 
-    startTransition(() => {
-      setOptimisticComingActionArray((prev) =>
-        prev.map(action => action.id === processedNewComingAction.id ? processedNewComingAction : action)
-      );
-    });
-
-    const data = new Promise<void>(async (resolve, reject) => {
-      const response = await editComingAction({newComingAction: processedNewComingAction, oldComingAction: oldComingAction!});
-      setIsEditing(false)
-      setEditingRowId(null)
-      if (response.success) {
-        setComingActionArray(prev =>
-          prev.map(action =>
-            action.id === processedNewComingAction.id ? processedNewComingAction : action
-          )
-        );
-        if (oldComingAction.active) { 
-          setProducts(p =>
-              p.map(prod => {
-              if (prod.id === oldComingAction.product && prod.id === processedNewComingAction.product) {
-                return { ...prod, stock: prod.stock - oldComingAction.qty + processedNewComingAction.qty };
-              }
-              if (prod.id === oldComingAction.product) { return { ...prod, stock: prod.stock - oldComingAction.qty }; }
-              if (prod.id === processedNewComingAction.product) { return { ...prod, stock: prod.stock + processedNewComingAction.qty }; }
-          
-              return prod;
-            })
-          );
-        
-          setVendors(prev =>
-            prev.map(vendor => {
-              if (vendor.id === oldComingAction.vendor && vendor.id === processedNewComingAction.vendor) {
-                return { ...vendor, balance: vendor.balance - oldComingAction.priceTotal + processedNewComingAction.priceTotal };
-              }
-              if (vendor.id === oldComingAction.vendor) return {...vendor, balance: vendor.balance - oldComingAction.priceTotal}; // subtract from debit
-              if (vendor.id === processedNewComingAction.vendor) return {...vendor, balance: vendor.balance + processedNewComingAction.priceTotal}; // add to debit
-              return vendor;
-            })
-          );
-        }
-        resolve()
-      } else {
-        console.log(response.error)
-        reject()
-      }
-    })
-
-    toaster.promise(data, {
+    toaster.promise(promise, {
       success: {
         title: "Operation successful",
         description: "Coming action edited successfully",
@@ -158,50 +261,23 @@ const Page = () => {
     newComingAction: Omit<comingActionType, 'id' | 'type' | 'active' | 'productName' | 'vendorName' | 'priceTotal'>
   ) {
 
+    if (!isSuccess) { console.log('no data'); return; }
+
     const processedNewComingAction: comingActionType = {
       ...newComingAction,
       id: Date.now().toString(),
       type: 'coming',
       active: true,
       priceTotal: newComingAction.pricePerPcs * newComingAction.qty,
-      productName: optimisticProducts.find(product => product.id === newComingAction.product)?.name || '',
-      vendorName: optimisticVendors.find(vendor => vendor.id === newComingAction.vendor)?.name || ''
+      productName: productsArray.find(product => product.id === newComingAction.product)?.name || '',
+      vendorName: vendorsArray.find(vendor => vendor.id === newComingAction.vendor)?.name || ''
     }
 
     reset()
 
-    startTransition(() => {
-      setOptimisticComingActionArray((prev) =>
-        [...prev, processedNewComingAction]
-      );
-    });
+    const promise = addComingMutation.mutateAsync(processedNewComingAction)
 
-    const data = new Promise<void>(async (resolve, reject) => {
-      const response = await addComingAction(processedNewComingAction);
-      if (response.success) {
-        setComingActionArray(prev => [...prev, processedNewComingAction]);
-        setProducts(prev =>
-          prev.map(product =>
-            product.id === processedNewComingAction.product
-              ? { ...product, stock: product.stock + processedNewComingAction.qty }
-              : product
-          )
-        );
-        setVendors(prev =>
-          prev.map(vendor =>
-            vendor.id === processedNewComingAction.vendor 
-            ? { ...vendor, balance: vendor.balance + processedNewComingAction.priceTotal } // add in debit 
-            : vendor
-          )
-        );
-        resolve()
-      } else {
-        console.log(response.error)
-        reject()
-      }
-    })
-
-    toaster.promise(data, {
+    toaster.promise(promise, {
       success: {
         title: "Operation successful",
         description: "Coming action added successfully",
@@ -216,47 +292,14 @@ const Page = () => {
 
   async function handleDeleteComingAction(id: string) {
     if (!window.confirm("Are you sure you want to delete?")) return;
+    if (!isSuccess) { console.log('no data'); return; }
 
-    startTransition(() => {
-      setOptimisticComingActionArray((prev) =>
-        prev.map((action) =>
-          action.id === id ? { ...action, active: false } : action
-        )
-      );
-    });
+    const currentAction = comingActionArray.find(action => action.id === id);
+    if (!currentAction) return;
 
-    const data = new Promise<void>(async (resolve, reject) => {
-      const currentAction = optimisticComingActionArray.find(action => action.id === id);
-      if (!currentAction) return;
-      const response = await deleteComingAction(currentAction);
-      if (response.success) {
-        setComingActionArray((prev) =>
-          prev.map((action) =>
-            action.id === id ? { ...action, active: false } : action
-          )
-        );
-        setProducts(prev =>
-          prev.map(product =>
-            product.id === currentAction.product
-              ? { ...product, stock: product.stock - currentAction.qty }
-              : product
-          )
-        );
-        setVendors(prev =>
-          prev.map(vendor =>
-            vendor.id === currentAction.vendor 
-            ? { ...vendor, balance: vendor.balance - currentAction.priceTotal } // subtract from debit
-            : vendor
-          )
-        );
-        resolve();
-      } else {
-        console.log(response?.error);
-        reject()
-      }
-    });
+    const promise = deleteComingMutation.mutateAsync(currentAction);
 
-    toaster.promise(data, {
+    toaster.promise(promise, {
       success: {
         title: "Operation successful",
         description: "Coming Action deleted successfully",
@@ -271,47 +314,14 @@ const Page = () => {
 
   async function handleRestoreComingAction(id: string) {
     if (!window.confirm("Are you sure you want to restore?")) return;
+    if (!isSuccess) { console.log('no data'); return; }
 
-    startTransition(() => {
-      setOptimisticComingActionArray((prev) =>
-        prev.map((action) =>
-          action.id === id ? { ...action, active: true } : action
-        )
-      );
-    });
 
-    const data = new Promise<void>(async (resolve, reject) => {
-      const currentAction = optimisticComingActionArray.find(action => action.id === id);
-      if (!currentAction) return;
-      const response = await restoreComingAction(currentAction);
-      if (response.success) {
-        setComingActionArray((prev) =>
-          prev.map((action) =>
-            action.id === id ? { ...action, active: true } : action
-          )
-        );
-        setProducts(prev =>
-          prev.map(product =>
-            product.id === currentAction.product
-              ? { ...product, stock: product.stock + currentAction.qty }
-              : product
-          )
-        );
-        setVendors(prev =>
-          prev.map(vendor =>
-            vendor.id === currentAction.vendor 
-            ? { ...vendor, balance: vendor.balance + currentAction.priceTotal } // add to debit
-            : vendor
-          )
-        );
-        resolve();
-      } else {
-        console.log(response?.error);
-        reject()
-      }
-    });
+    const currentAction = comingActionArray.find(action => action.id === id);
+    if (!currentAction) return;
+    const promise = restoreComingMutation.mutateAsync(currentAction);
 
-    toaster.promise(data, {
+    toaster.promise(promise, {
       success: {
         title: "Operation successful",
         description: "Coming Action restored successfully",
@@ -327,8 +337,8 @@ const Page = () => {
   // ag-grid
 
   const colDefs: ColDef<comingActionType, any>[] = [
-    {field: 'qty'},
-    {field: 'pricePerPcs', headerName: 'Price per Pcs'},
+    { field: 'qty' },
+    { field: 'pricePerPcs', headerName: 'Price per Pcs' },
     {
       field: 'date',
       filter: 'agDateColumnFilter',
@@ -339,7 +349,7 @@ const Page = () => {
         inRangeInclusive: true
       }
     },
-    {field: 'notes'},
+    { field: 'notes' },
     {
       field: 'productName',
       headerName: 'Product',
@@ -359,26 +369,27 @@ const Page = () => {
         const rowId = params.data?.id
         if (!rowId) return <>Not Found</>
         return (
-        <Box display={"flex"} alignItems={"center"} h={'100%'}>
-          <Menu.Root>
-            <Menu.Trigger asChild><IoMdMenu /></Menu.Trigger>
-            <Portal>
-              <Menu.Positioner>
-                <Menu.Content>
-                  <Menu.Item value="" onClick={() => params.data?.active ?
-                    handleDeleteComingAction(rowId) : handleRestoreComingAction(rowId)
-                  }>
-                    {params.data?.active ? 'Delete' : 'Restore' }
-                  </Menu.Item>
-                  <Menu.Item value="" onClick={() => onBtStartEditing(rowId)}>
-                    Edit
-                  </Menu.Item>
-                </Menu.Content>
-              </Menu.Positioner>
-            </Portal>
-          </Menu.Root>
-        </Box>
-      )},
+          <Box display={"flex"} alignItems={"center"} h={'100%'}>
+            <Menu.Root>
+              <Menu.Trigger asChild><IoMdMenu /></Menu.Trigger>
+              <Portal>
+                <Menu.Positioner>
+                  <Menu.Content>
+                    <Menu.Item value="" onClick={() => params.data?.active ?
+                      handleDeleteComingAction(rowId) : handleRestoreComingAction(rowId)
+                    }>
+                      {params.data?.active ? 'Delete' : 'Restore'}
+                    </Menu.Item>
+                    <Menu.Item value="" onClick={() => onBtStartEditing(rowId)}>
+                      Edit
+                    </Menu.Item>
+                  </Menu.Content>
+                </Menu.Positioner>
+              </Portal>
+            </Menu.Root>
+          </Box>
+        )
+      },
       filter: 'agNumberColumnFilter',
       filterParams: {
         filterOptions: [
@@ -402,14 +413,14 @@ const Page = () => {
           },
         ] as IFilterOptionDef[],
         maxNumConditions: 1,
-      },      
+      },
     }
   ]
 
   // make row red if it is not active
   const getRowClass = useCallback((params: RowClassParams<comingActionType>) => {
     if (params.data?.active === false) {
-        return "text-red-900";
+      return "text-red-900";
     }
   }, []);
 
@@ -429,11 +440,6 @@ const Page = () => {
   const onRowValueChanged = useCallback((event: RowValueChangedEvent) => {
     const data = event.data;
     console.log(data);
-  }, []);
-
-  const onBtStopEditing = useCallback(() => {
-    setEditingRowId(null)
-    setIsEditing(false)
   }, []);
 
   const onBtStartEditing = (rowId: string) => {
@@ -464,139 +470,132 @@ const Page = () => {
   }
 
 
-	return ( 
+  return (
     <Box display={"flex"} flexDirection={"column"} width={"95%"} m={"6"}>
 
       <Heading size={'3xl'}>Coming</Heading>
 
-      <Accordion.Root collapsible width={'80%'}>
-        <Accordion.Item key={'form'} value={'form'}>
-          <Accordion.ItemTrigger bg={"gray.100"} p={"2"}>
-            <Span flex="1">Form</Span>
-            <Accordion.ItemIndicator />
-          </Accordion.ItemTrigger>
-          <Accordion.ItemContent>
-            <Accordion.ItemBody>
-              <Heading size={'2xl'}>New Entry</Heading>
-              <form onSubmit={handleSubmit((data) => handleAddComingAction(data))}>
+      {isSuccess && (
+        <Accordion.Root collapsible width={'80%'}>
+          <Accordion.Item key={'form'} value={'form'}>
+            <Accordion.ItemTrigger bg={"gray.100"} p={"2"}>
+              <Span flex="1">Form</Span>
+              <Accordion.ItemIndicator />
+            </Accordion.ItemTrigger>
+            <Accordion.ItemContent>
+              <Accordion.ItemBody>
+                <Heading size={'2xl'}>New Entry</Heading>
+                <form onSubmit={handleSubmit((data) => handleAddComingAction(data))}>
 
-                <Field.Root invalid={!!errors.qty?.message} mb={"2"}>
-                  <Field.Label>Quantity</Field.Label>
-                  <Input 
-                    {...register('qty', { valueAsNumber: true })} 
-                    border={"4"}
-                    borderColor={"black"}
-                    padding={2}
-                    type="number"
-                  />
-                  <Field.ErrorText>{errors.qty?.message}</Field.ErrorText>
-                </Field.Root>
+                  <Field.Root invalid={!!errors.qty?.message} mb={"2"}>
+                    <Field.Label>Quantity</Field.Label>
+                    <Input
+                      {...register('qty', { valueAsNumber: true })}
+                      border={"4"}
+                      borderColor={"black"}
+                      padding={2}
+                      type="number"
+                    />
+                    <Field.ErrorText>{errors.qty?.message}</Field.ErrorText>
+                  </Field.Root>
 
-                <Field.Root invalid={!!errors.pricePerPcs?.message} mb={"2"}>
-                  <Field.Label>Price per Pcs</Field.Label>
-                  <Input 
-                    {...register('pricePerPcs', { valueAsNumber: true })} 
-                    border={"4"}
-                    borderColor={"black"}
-                    padding={2}
-                    type="number"
-                  />
-                  <Field.ErrorText>{errors.pricePerPcs?.message}</Field.ErrorText>
-                </Field.Root>
+                  <Field.Root invalid={!!errors.pricePerPcs?.message} mb={"2"}>
+                    <Field.Label>Price per Pcs</Field.Label>
+                    <Input
+                      {...register('pricePerPcs', { valueAsNumber: true })}
+                      border={"4"}
+                      borderColor={"black"}
+                      padding={2}
+                      type="number"
+                    />
+                    <Field.ErrorText>{errors.pricePerPcs?.message}</Field.ErrorText>
+                  </Field.Root>
 
-                <Field.Root invalid={!!errors.vendor?.message} mb={"2"}>
-                  <Field.Label>Vendor</Field.Label>
-                  <NativeSelect.Root
-                    display={"inline-block"}
+                  <Field.Root invalid={!!errors.vendor?.message} mb={"2"}>
+                    <Field.Label>Vendor</Field.Label>
+                    <NativeSelect.Root
+                      display={"inline-block"}
                     >
-                    <NativeSelect.Field
-                      {...register('vendor')}
-                      borderColor={'gray.400'}
-                      h={'8'}
-                      defaultValue={''}
-                    >
-                      <option hidden value={''}>Select Vendor</option>
-                      {optimisticVendors.filter(vendor => vendor.active).map(vendor => (
-                        <option key={vendor.id} value={vendor.id}>
-                          {vendor.name}
-                        </option>
-                      ))}
-                    </NativeSelect.Field>
-                    <NativeSelect.Indicator/>
-                  </NativeSelect.Root>
-                  <Field.ErrorText>{errors.vendor?.message && errors.vendor?.message}</Field.ErrorText>
-                </Field.Root>
-                
-                <Field.Root invalid={!!errors.product?.message} mb={"2"}>
-                  <Field.Label>Product</Field.Label>
-                  <NativeSelect.Root
-                    display={"inline-block"}
-                    >
-                    <NativeSelect.Field
-                      {...register('product')}
-                      borderColor={'gray.400'}
-                      h={'8'}
-                      defaultValue={''}
-                    >
-                      <option hidden value={''}>Select Product</option>
-                      {optimisticProducts.filter(product => product.active).map(product => (
-                        <option key={product.id} value={product.id}>
-                          {product.name}
-                        </option>
-                      ))}
-                    </NativeSelect.Field>
-                    <NativeSelect.Indicator/>
-                  </NativeSelect.Root>
-                  <Field.ErrorText>{errors.product?.message && errors.product?.message}</Field.ErrorText>
-                </Field.Root>
+                      <NativeSelect.Field
+                        {...register('vendor')}
+                        borderColor={'gray.400'}
+                        h={'8'}
+                        defaultValue={''}
+                      >
+                        <option hidden value={''}>Select Vendor</option>
+                        {vendorsArray.filter(vendor => vendor.active).map(vendor => (
+                          <option key={vendor.id} value={vendor.id}>
+                            {vendor.name}
+                          </option>
+                        ))}
+                      </NativeSelect.Field>
+                      <NativeSelect.Indicator />
+                    </NativeSelect.Root>
+                    <Field.ErrorText>{errors.vendor?.message && errors.vendor?.message}</Field.ErrorText>
+                  </Field.Root>
 
-                <Field.Root invalid={!!errors.date?.message} mb={"2"}>
-                  <Field.Label>Date</Field.Label>
-                  <Input
-                    {...register('date')}
-                    border={"4"}
-                    borderColor={"black"}
-                    padding={2}
-                    type="date"
-                    defaultValue={new Date().toISOString().split("T")[0]}
-                  />
-                  <Field.ErrorText>{errors.date?.message && errors.date?.message}</Field.ErrorText>
-                </Field.Root>
+                  <Field.Root invalid={!!errors.product?.message} mb={"2"}>
+                    <Field.Label>Product</Field.Label>
+                    <NativeSelect.Root
+                      display={"inline-block"}
+                    >
+                      <NativeSelect.Field
+                        {...register('product')}
+                        borderColor={'gray.400'}
+                        h={'8'}
+                        defaultValue={''}
+                      >
+                        <option hidden value={''}>Select Product</option>
+                        {productsArray.filter(product => product.active).map(product => (
+                          <option key={product.id} value={product.id}>
+                            {product.name}
+                          </option>
+                        ))}
+                      </NativeSelect.Field>
+                      <NativeSelect.Indicator />
+                    </NativeSelect.Root>
+                    <Field.ErrorText>{errors.product?.message && errors.product?.message}</Field.ErrorText>
+                  </Field.Root>
 
-                <Field.Root invalid={!!errors.notes?.message} mb={"2"}>
-                  <Field.Label>Notes</Field.Label>
-                  <Input
-                    {...register('notes')}
-                    border={"4"}
-                    borderColor={"black"}
-                    padding={2}
-                  />
-                  <Field.ErrorText>{errors.notes?.message && errors.notes?.message}</Field.ErrorText>
-                </Field.Root>
-                
-                <Button type="submit" disabled={fetchStatus !== 'success'} >Submit</Button>
-              </form>
-            </Accordion.ItemBody>
-          </Accordion.ItemContent>
-        </Accordion.Item>
-      </Accordion.Root>
+                  <Field.Root invalid={!!errors.date?.message} mb={"2"}>
+                    <Field.Label>Date</Field.Label>
+                    <Input
+                      {...register('date')}
+                      border={"4"}
+                      borderColor={"black"}
+                      padding={2}
+                      type="date"
+                      defaultValue={new Date().toISOString().split("T")[0]}
+                    />
+                    <Field.ErrorText>{errors.date?.message && errors.date?.message}</Field.ErrorText>
+                  </Field.Root>
 
+                  <Field.Root invalid={!!errors.notes?.message} mb={"2"}>
+                    <Field.Label>Notes</Field.Label>
+                    <Input
+                      {...register('notes')}
+                      border={"4"}
+                      borderColor={"black"}
+                      padding={2}
+                    />
+                    <Field.ErrorText>{errors.notes?.message && errors.notes?.message}</Field.ErrorText>
+                  </Field.Root>
+
+                  <Button type="submit" disabled={!isSuccess} >Submit</Button>
+                </form>
+              </Accordion.ItemBody>
+            </Accordion.ItemContent>
+          </Accordion.Item>
+        </Accordion.Root>
+      )}
       <Box display={"flex"} flexDirection={"column"} h='90vh'>
-        {fetchStatus === 'success' ? (
+        {isSuccess ? (
           <>
             <Box mb={"4"} p={"2"}>
               <Heading size={'3xl'} mt={"4"} mr={'4'} display={"inline-block"}>Data</Heading>
               <Button mb={'2'} variant={'outline'} display={"inline-block"}
                 onClick={() => gridRef.current!.api.exportDataAsCsv()}>
                 Download CSV export file
-              </Button>
-              <Button mb={'2'} variant={'outline'} display={"inline-block"}
-                onClick={() => onBtStartEditing('1743917415499')}>
-                Start Editing
-              </Button>
-              <Button mb={'2'} variant={'outline'} display={"inline-block"}
-                onClick={onBtStopEditing}>
-                Stop Editing
               </Button>
               {/* <Button variant={'outline'} onClick={() => console.log(gridRef.current!.api.getDataAsCsv())}>
                 Show CSV export content text</Button> */}
@@ -605,32 +604,38 @@ const Page = () => {
             <AgGridReact
               ref={gridRef}
               columnDefs={colDefs}
-              rowData={optimisticComingActionArray}
+              rowData={comingActionArray}
               suppressDragLeaveHidesColumns
               getRowClass={getRowClass}
               initialState={initialState}
               onRowValueChanged={onRowValueChanged}
               defaultColDef={defaultColDef}
             />
-            
+
           </>
-        ) : fetchStatus === 'error' ? (
+        ) : isError ? (
           <>
             <h1>Something went wrong</h1>
-						<Button onClick={() => {
-              setFetchStatus('loading');         
+            <Button onClick={() => {
+              refetchComing();
+              refetchProducts();
+              refetchVendors();
             }} w={"200px"}>Retry</Button>
           </>
         ) : (
           <h1>Loading...</h1>
         )}
       </Box>
-			<Toaster />
-      {isEditing && ( 
+      <Toaster />
+      {isEditing && (
         <EditDialog
           isEditing={isEditing}
-          rowData={optimisticComingActionArray.find(action => action.id === editingRowId)}
+          rowData={comingActionArray!.find(action => action.id === editingRowId)}
           handleEditComingAction={handleEditComingAction}
+          abortEditiing={() => {
+            setIsEditing(false)
+            setEditingRowId(null)
+          }}
         />
       )}
     </Box>
