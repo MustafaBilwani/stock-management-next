@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { Accordion, Box, Button, Field, Heading, Input, Menu, NativeSelect, Portal, Span } from "@chakra-ui/react";
 import { IoMdMenu } from "react-icons/io";

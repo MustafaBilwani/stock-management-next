@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import { useState } from "react";
 import { productType } from "@/app/types";
 import { addProduct, checkProductAllowedToDelete, deleteProduct, restoreProduct } from "../server-action/productActions";
 import { Toaster, toaster } from "@/components/ui/toaster";

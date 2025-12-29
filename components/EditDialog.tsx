@@ -1,5 +1,4 @@
 import { Button, CloseButton, Dialog, Field, Heading, Input, NativeSelect, Portal } from '@chakra-ui/react'
-import React from 'react'
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';

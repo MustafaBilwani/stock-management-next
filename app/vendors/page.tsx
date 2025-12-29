@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import { useState } from "react";
 import { vendorType } from "@/app/types";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { Accordion, Box, Button, Heading, Input, Menu, NativeSelect, Portal, Table } from "@chakra-ui/react";
